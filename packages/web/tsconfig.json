@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "noEmit": true,
+    "declaration": false
+  },
+  /**
+   * vite.config.ts kasıtlı olarak dışarıda: kökteki vitest (vite 5) ile
+   * buradaki vite 6 aynı anda kurulu olduğu için Plugin tipleri çakışıyor.
+   * Yapılandırmayı Vite kendi çalışma zamanında yükler, tip kontrolüne gerek yok.
+   */
+  "include": ["src/**/*"]
+}

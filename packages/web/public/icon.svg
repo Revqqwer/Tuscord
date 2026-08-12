@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Tuscord">
+  <!--
+    Tuscord simgesi: mors (İng. "walrus" / "tusk").
+    İsim TUSK + Discord'dan geliyor; simge de bir mors.
+    Kendi çizimimiz — Discord'un Wumpus'u ve ikon seti telifli (spec Bölüm 9).
+    Sade ve tek renk gövde: 48px'te de okunur kalması için.
+  -->
+  <rect width="512" height="512" rx="112" fill="#0f1115" />
+
+  <!-- Baş: yuvarlak, turkuaz -->
+  <circle cx="256" cy="238" r="150" fill="#14b8a6" />
+
+  <!-- Burun / bıyık yastığı -->
+  <ellipse cx="256" cy="300" rx="92" ry="74" fill="#0d9488" />
+  <circle cx="256" cy="286" r="26" fill="#0f1115" />
+
+  <!-- Gözler -->
+  <circle cx="206" cy="222" r="20" fill="#0f1115" />
+  <circle cx="306" cy="222" r="20" fill="#0f1115" />
+  <circle cx="212" cy="216" r="7" fill="#e6e8ec" />
+  <circle cx="312" cy="216" r="7" fill="#e6e8ec" />
+
+  <!-- İki fildişi (tusk) — markanın vurgusu -->
+  <path d="M232 322c-6 42-12 74-24 104-4 10-18 8-19-3-3-34 4-72 20-104z" fill="#f5f7fa" />
+  <path d="M280 322c6 42 12 74 24 104 4 10 18 8 19-3 3-34-4-72-20-104z" fill="#f5f7fa" />
+
+  <!-- Bıyıklar -->
+  <g stroke="#0f1115" stroke-width="6" stroke-linecap="round" opacity="0.85">
+    <line x1="214" y1="300" x2="150" y2="292" />
+    <line x1="214" y1="312" x2="156" y2="320" />
+    <line x1="298" y1="300" x2="362" y2="292" />
+    <line x1="298" y1="312" x2="356" y2="320" />
+  </g>
+</svg>

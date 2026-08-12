@@ -1,0 +1,45 @@
+# Cloudflare Tunnel arkasında Caddy — yalnızca HTTP.
+#
+# TLS'i Cloudflare edge veriyor (tarayıcı → Cloudflare HTTPS → tunnel → bu Caddy
+# HTTP). Bu yüzden auto_https kapalı; Caddy sertifika almaya çalışmaz.
+# Dışarıya port açılmaz: cloudflared aynı Docker ağından caddy:80'e bağlanır.
+
+{
+	auto_https off
+	# Gerçek istemci IP'si Cloudflare'den gelir; Caddy güvenilir proxy olarak işler.
+	servers {
+		trusted_proxies static 0.0.0.0/0
+	}
+}
+
+:80 {
+	encode zstd gzip
+
+	# WebSocket gateway.
+	handle /gateway* {
+		reverse_proxy api:3001
+	}
+
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+
+	# Hukuki iletişim ucu (/legal/contact) — API'ye.
+	handle /legal/* {
+		reverse_proxy api:3001
+	}
+
+	# Statik istemci (Vite build çıktısı).
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+}
