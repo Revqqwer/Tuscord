@@ -1,0 +1,40 @@
+# Geliştirme için: sadece postgres + redis.
+#   docker compose up -d
+# Üretim dağıtımı için docker/compose.prod.yml kullanılır (Caddy + api + gateway dahil).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tuscord
+      POSTGRES_PASSWORD: tuscord
+      POSTGRES_DB: tuscord
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tuscord"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # appendonly: oturumlar sunucu yeniden başlayınca uçmasın
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:

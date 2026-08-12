@@ -1,0 +1,74 @@
+# Üretim dağıtımı.
+#   docker compose -f docker/compose.prod.yml up -d
+#
+# Faz 2'de livekit ve coturn buraya eklenecek; o zaman
+# UDP 50000-50100 ve TCP 7881 portlarının HEM sunucu güvenlik duvarında
+# HEM de sağlayıcı panelinde açık olduğunu doğrula (spec Bölüm 10).
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../packages/web/dist:/srv/web:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://tuscord:${POSTGRES_PASSWORD}@postgres:5432/tuscord
+      REDIS_URL: redis://redis:6379
+    volumes:
+      # Yüklenen dosyalar (R2 yapılandırılmadıysa yerel disk). Bu volume
+      # olmadan konteyner yeniden başlayınca tüm ekler ve avatarlar uçar.
+      # R2 kullanıyorsan zararsız — dizin boş kalır.
+      - uploads:/app/packages/server/var/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tuscord
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: tuscord
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tuscord"]
+      interval: 10s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:
+  caddy_data:
+  caddy_config:

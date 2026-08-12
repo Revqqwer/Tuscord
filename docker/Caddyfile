@@ -1,0 +1,43 @@
+# Caddy: TLS (otomatik sertifika) + ters proxy.
+#
+# www'yi köke yönlendir, sonra kökü servis et. Cloudflare önde olduğunda
+# sertifikayı yine Caddy üretir (Cloudflare "Full (strict)" moduyla uyumlu).
+
+www.tuscord.com {
+	redir https://tuscord.com{uri} permanent
+}
+
+tuscord.com {
+	encode zstd gzip
+
+	# WebSocket gateway — Caddy Upgrade başlığını kendi geçirir.
+	handle /gateway* {
+		reverse_proxy api:3001
+	}
+
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+
+	# Hukuki iletişim ucu — sürümlü API'nin değil, sitenin parçası (/legal/contact).
+	handle /legal/* {
+		reverse_proxy api:3001
+	}
+
+	# Statik istemci (Vite build çıktısı).
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		# Sunucu Türkiye'de barındırılıyor; Cloudflare önde olsa da
+		# temel güvenlik başlıklarını burada da veriyoruz.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+}

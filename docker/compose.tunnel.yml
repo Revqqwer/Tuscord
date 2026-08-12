@@ -1,0 +1,80 @@
+# Lokal + Cloudflare Tunnel yayını.
+#
+#   docker compose -f docker/compose.tunnel.yml up -d --build
+#
+# tuscord.com → Cloudflare → cloudflared → caddy(HTTP) → api + statik web.
+# Dışarıya HİÇBİR port açılmaz; cloudflared giden bağlantı kurar.
+#
+# Gerekenler (.env):
+#   POSTGRES_PASSWORD, SESSION_SECRET, TUNNEL_TOKEN
+#   COOKIE_SECURE=true, COOKIE_DOMAIN=tuscord.com, WEB_ORIGIN=https://tuscord.com
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    depends_on:
+      - caddy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile.tunnel:/etc/caddy/Caddyfile:ro
+      - ../packages/web/dist:/srv/web:ro
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    restart: unless-stopped
+    env_file: ../.env
+    # Üretim değerleri .env'i ezer: aynı .env dev'de de kullanılıyor,
+    # oraya dokunmadan tunnel için doğru cookie/origin ayarlarını veririz.
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://tuscord:${POSTGRES_PASSWORD}@postgres:5432/tuscord
+      REDIS_URL: redis://redis:6379
+      COOKIE_SECURE: "true"
+      COOKIE_DOMAIN: tuscord.com
+      WEB_ORIGIN: https://tuscord.com
+    volumes:
+      - uploads:/app/packages/server/var/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tuscord
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: tuscord
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tuscord"]
+      interval: 10s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:

@@ -1,0 +1,140 @@
+@import 'tailwindcss';
+
+/**
+ * Tema — tüm renkler CSS değişkeni üzerinden (spec Bölüm 9).
+ * Ana renk Discord'un #5865F2'sinden belirgin şekilde kaydırıldı:
+ * turkuaz aile, mor/indigo değil.
+ */
+@theme {
+  --color-brand: #14b8a6;
+  --color-brand-strong: #0d9488;
+
+  --color-surface-0: #0f1115;
+  --color-surface-1: #15181e;
+  --color-surface-2: #1c2027;
+  --color-surface-3: #252a33;
+
+  --color-ink: #e6e8ec;
+  --color-ink-muted: #9aa2b1;
+  --color-ink-faint: #6b7280;
+
+  --color-line: #262b34;
+  --color-danger: #f0616d;
+  --color-online: #3ba55d;
+  --color-idle: #faa81a;
+  --color-dnd: #ed4245;
+
+  /* 'Inter Variable' fontsource'un gömdüğü aile adı; yüklenemezse sisteme düşer. */
+  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  /*
+   * Mobil tarayıcıda adres çubuğu kayarken 100vh sabit kalır ve alt kısım
+   * ekranın dışına taşar — yazma kutusu görünmez olur. dvh gerçek görünür
+   * yüksekliği izler. vh önce yazılıyor: dvh desteklemeyen tarayıcı için yedek.
+   */
+  height: 100vh;
+  height: 100dvh;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface-0);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  /* iOS'ta lastik bandı kaydırmasının panelleri kaydırmasını önler. */
+  overscroll-behavior: none;
+  /* Çentik ve alt gezinme çubuğu altında içerik kalmasın. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/*
+ * Dokunmalı cihazlarda hedefler en az ~44px olmalı; fare ile aynı arayüz
+ * daha sıkı olabilir. `pointer: coarse` tam olarak bu ayrımı yapar.
+ */
+@media (pointer: coarse) {
+  button,
+  [role='button'],
+  select {
+    min-height: 40px;
+  }
+}
+
+/*
+ * iOS Safari, yazı tipi 16px'in altındaysa girişe odaklanınca sayfayı
+ * yakınlaştırır ve düzen bozulur. Girişleri 16px'te tutmak bunu engeller.
+ */
+@media (max-width: 767px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Odak halkası baştan görünür — klavye erişilebilirliği sonradan eklenmez (spec). */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* İnce kaydırma çubuğu; Discord'un görsel diline ait değil, yaygın bir kalıp. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-surface-3) transparent;
+}
+
+/*
+ * Mors yükleyici animasyonu (WalrusLoader).
+ * Baş yumuşakça sallanır, dişler sırayla zıplar, gözler arada kırpar.
+ * transform-origin SVG kullanıcı biriminde: viewBox 512, merkez ~256.
+ */
+.walrus-head {
+  transform-origin: 256px 320px;
+  animation: walrus-bob 2.4s ease-in-out infinite;
+}
+.walrus-tusk {
+  transform-origin: center 322px;
+}
+.walrus-tusk-left {
+  animation: walrus-wiggle 1.2s ease-in-out infinite;
+}
+.walrus-tusk-right {
+  animation: walrus-wiggle 1.2s ease-in-out infinite 0.6s;
+}
+.walrus-eyes {
+  animation: walrus-blink 3.2s step-end infinite;
+  transform-origin: 256px 222px;
+}
+
+@keyframes walrus-bob {
+  0%, 100% { transform: rotate(-4deg) translateY(0); }
+  50% { transform: rotate(4deg) translateY(-6px); }
+}
+@keyframes walrus-wiggle {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-8px) rotate(3deg); }
+}
+@keyframes walrus-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.1); }
+}
+
+/* Hareket azaltma tercihi: mors dursun. */
+@media (prefers-reduced-motion: reduce) {
+  .walrus-head,
+  .walrus-tusk,
+  .walrus-eyes {
+    animation: none;
+  }
+}

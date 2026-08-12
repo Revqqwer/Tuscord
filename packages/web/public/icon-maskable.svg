@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Tuscord">
+  <!--
+    Maskelenebilir sürüm: Android ikonu daire/kare/damla gibi kesebilir.
+    Güvenli alan merkezdeki %80'lik daire, bu yüzden mors küçültülüp ortalandı.
+  -->
+  <rect width="512" height="512" fill="#0f1115" />
+  <g transform="translate(256 256) scale(0.66) translate(-256 -248)">
+    <circle cx="256" cy="238" r="150" fill="#14b8a6" />
+    <ellipse cx="256" cy="300" rx="92" ry="74" fill="#0d9488" />
+    <circle cx="256" cy="286" r="26" fill="#0f1115" />
+    <circle cx="206" cy="222" r="20" fill="#0f1115" />
+    <circle cx="306" cy="222" r="20" fill="#0f1115" />
+    <circle cx="212" cy="216" r="7" fill="#e6e8ec" />
+    <circle cx="312" cy="216" r="7" fill="#e6e8ec" />
+    <path d="M232 322c-6 42-12 74-24 104-4 10-18 8-19-3-3-34 4-72 20-104z" fill="#f5f7fa" />
+    <path d="M280 322c6 42 12 74 24 104 4 10 18 8 19-3 3-34-4-72-20-104z" fill="#f5f7fa" />
+  </g>
+</svg>
