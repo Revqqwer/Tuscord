@@ -5,14 +5,25 @@ kendi markası olan, sıfırdan yazılmış.
 
 Kapsam ve kararlar: [PROJE-SPEC.md](../PROJE-SPEC.md)
 
-**Durum:** Faz 1 (metin) — çekirdek tamamlandı, gerçek kullanıcı testi bekliyor.
+**Durum:** **Canlı — [tuscord.com](https://tuscord.com)**. Faz 1 (metin),
+Faz 2 (sesli sohbet) ve Faz 3 (ekran paylaşımı) tamamlandı. Gerçek ağlarda
+(farklı operatörler) gecikme testi devam ediyor.
 
-## Alınan kararlar (bu oturumda)
+**Öne çıkan özellikler:** sunucu/kanal/rol + izin motoru · metin sohbeti
+(markdown, düzenle/yanıtla/tepki, @etiketleme, dosya/görsel) · DM · arkadaş
+sistemi (tag ile) · mesaj arama · sağ tık menüleri · sunucu ikon/banner ·
+kanal izin overwrite ekranı · platform admin · **sesli kanallar** (mesh P2P) ·
+**ekran paylaşımı** (kanaldaki herkes) · moderasyon paneli · PWA · TR/EN.
+
+## Alınan kararlar
 
 | Karar | Değer |
 |---|---|
-| İsim | **Tuscord** (domain sonra) |
-| Barındırma | **Türkiye** — 5651 yer sağlayıcı yükümlülüğü doğrudan bizde, KVKK yurt dışı aktarım evrakı gerekmiyor |
+| İsim | **Tuscord** |
+| Domain | **tuscord.com** (GoDaddy → Cloudflare nameserver) |
+| Barındırma (şimdilik) | Ev makinesi + **Cloudflare Tunnel** (genel IP/açık port gerektirmez, ücretsiz). Ölçeklenince TR VPS'e taşınır. |
+| Ses/ekran taşıma | **Mesh P2P WebRTC** — medya sunucusu YOK. Sinyalleşme gateway üzerinden, NAT geçişi public STUN. LiveKit değil: ev+tunnel altyapısında LiveKit medyası çalışmaz. |
+| E-posta | **Brevo** SMTP (Gmail'den taşındı, spam çözüldü; DMARC p=reject) |
 | Trafik kaydı saklama | 365 gün, otomatik silme (`TRAFFIC_LOG_RETENTION_DAYS`) |
 | Ana renk | `#14b8a6` turkuaz — Discord'un `#5865F2`'sinden belirgin farklı |
 
@@ -25,9 +36,9 @@ Kapsam ve kararlar: [PROJE-SPEC.md](../PROJE-SPEC.md)
 ```
 packages/
   shared/   izin motoru, snowflake, API tipleri, gateway protokolü  (istemci+sunucu ortak)
-  server/   Fastify REST + ws gateway + Drizzle/Postgres
-  web/      React + Vite + Tailwind
-docker/     Caddyfile, üretim compose, sunucu imajı
+  server/   Fastify REST + ws gateway + Drizzle/Postgres + mesh sinyalleşme
+  web/      React + Vite + Tailwind + WebRTC mesh (lib/voice.ts)
+docker/     Caddyfile(.tunnel), compose.prod.yml + compose.tunnel.yml, sunucu imajı
 ```
 
 `shared` paketi kasıtlı olarak ortak: izin hesabı istemcide ve sunucuda
@@ -93,9 +104,9 @@ npm test
 ```
 
 Spec zorunlu kılıyor: izin hesaplama fonksiyonu ve hız sınırlayıcı için
-birim testleri. Şu an 119 test (izin 41, markdown 33, dosya tipi 20,
-hız sınırı 14, snowflake 11). **İzin motorunu değiştirirken testleri önce
-yaz** — Discord klonlarının en sık patladığı yer burası.
+birim testleri. Şu an 124 test (izin 41, markdown 33, dosya tipi 20,
+hız sınırı 14, içerik tarama 5, snowflake 11). **İzin motorunu değiştirirken
+testleri önce yaz** — Discord klonlarının en sık patladığı yer burası.
 
 Not: testler `shared` ve `server` paketlerinde koşuyor. `web` paketinde
 vitest ayağa kalkmıyor (vite 6 / vitest 2 uyumsuzluğu), bu yüzden saf
@@ -123,44 +134,69 @@ gateway olayları izin süzgecinden geçer, arama yalnızca görünür kanallard
 konumdaki rolü/üyeyi yönetemezsin (`role_hierarchy`), sunucu sahibi
 dokunulmazdır. Dördü de uçtan uca test edildi.
 
-## Dağıtım (Faz 1)
+## Dağıtım
 
-En ucuz kurulum: tek TR VPS + Docker Compose + Caddy + Cloudflare (ücretsiz).
-R2 gerekmez — dosyalar yerel diskte kalıcı volume'de durur (~100 kullanıcı için yeter).
+Şu an **sıfır maliyetli** çalışıyor: ev makinesinde Docker Compose + Caddy,
+öne **Cloudflare Tunnel** (`cloudflared` konteyneri). Genel IP veya açık port
+gerekmez — tünel `caddy:80`'e bağlanır, `tuscord.com` Cloudflare Zero Trust
+üzerinden yayınlanır. R2 gerekmez; dosyalar kalıcı volume'de durur.
 
-**Adımlar:**
+**Canlı stack (Cloudflare Tunnel):**
 
 ```bash
-# 1. Web'i derle (Caddy dist'ten statik servis eder)
-npm run build --workspace=@tuscord/shared
-npm run build --workspace=@tuscord/web
+# .env hazırla: NODE_ENV=production, COOKIE_SECURE=true, SESSION_SECRET (32+ bayt),
+# POSTGRES_PASSWORD, WEB_ORIGIN=https://tuscord.com, COOKIE_DOMAIN=tuscord.com,
+# TUNNEL_TOKEN=<Cloudflare Zero Trust tünel token'ı>
 
-# 2. .env hazırla (aşağıdaki asgari alanlar)
-cp .env.example .env   # düzenle
+docker compose --env-file .env -f docker/compose.tunnel.yml up -d --build
 
-# 3. Servisleri ayağa kaldır (api imajı burada build edilir)
-docker compose -f docker/compose.prod.yml up -d --build
-
-# 4. Şemayı kur — prod imajında derlenmiş dist çalışır (src DEĞİL)
-docker compose -f docker/compose.prod.yml exec api node packages/server/dist/db/migrate.js
+# Şemayı kur (derlenmiş dist çalışır, src DEĞİL)
+docker compose --env-file .env -f docker/compose.tunnel.yml \
+  exec -T api node packages/server/dist/db/migrate.js
 ```
 
-**`.env`'de üretim için asgari:**
-`NODE_ENV=production`, `COOKIE_SECURE=true`, `SESSION_SECRET` (32+ bayt),
-`POSTGRES_PASSWORD`, `WEB_ORIGIN=https://alanadi`, `COOKIE_DOMAIN=alanadi`.
-R2 alanları boş bırakılırsa yerel disk kullanılır.
+> `--env-file .env` şart: compose dosyası `docker/` alt dizininde, `.env` kökte;
+> bayrak olmadan `${POSTGRES_PASSWORD}` boş gelir. API `3001` portunu dinler.
 
-**`docker/Caddyfile`** içindeki `ALAN_ADI`'nı gerçek domain ile değiştir.
-Cloudflare önde: DNS + CDN + DDoS + WAF, hepsi ücretsiz katman.
+**Alternatif — VPS + açık HTTPS:** genel IP'li bir sunucuda
+`docker/compose.prod.yml` + `docker/Caddyfile` (içindeki `ALAN_ADI`'nı değiştir)
+kullanılır; Cloudflare önde DNS/CDN/DDoS/WAF sağlar. Mesh P2P ses/ekran için
+**ekstra port açmaya gerek yok** — medya tarayıcılar arası doğrudan gider,
+NAT geçişi STUN ile yapılır. (Katı NAT arkasındaki kullanıcılar için ileride
+coturn/TURN ya da LiveKit SFU eklenebilir; UDP portları o zaman gerekir.)
 
-> **Deploy öncesi doğrulandı** (bu makinede prod imajı build edilip çalıştırıldı):
-> `@tuscord/shared` prod'da dist'ten çözülüyor, R2'siz yerel diske düşüyor,
-> yükleme volume'ü kalıcı, `/health` → 200. İki tuzak baştan kapatıldı:
-> shared'in giriş noktası prod'da dist'e yönlendiriliyor (Dockerfile), ve
-> `uploads` named volume olmadan konteyner restart'ında dosyalar uçardı.
+**Docker Desktop notu:** ara sıra kendiliğinden durur ve `tuscord.com` düşer;
+`Docker Desktop.exe` yeniden başlatılıp stack `up -d` ile geri gelir.
 
-Faz 2'ye geçmeden önce: LiveKit için **UDP 50000–50100 ve TCP 7881**
-hem sunucu iptables'ında hem sağlayıcı panelinde açık olmalı.
+## Sesli sohbet ve ekran paylaşımı (Faz 2–3)
+
+**Mimari: mesh P2P WebRTC**, medya sunucusu yok. Ses kanalındaki her katılımcı
+diğer herkese doğrudan bir `RTCPeerConnection` açar; sinyalleşme (SDP/ICE)
+mevcut gateway WebSocket'i üzerinden taşınır (`VOICE_STATE` / `VOICE_SIGNAL`
+opcode'ları, `VOICE_STATE_UPDATE` olayı), NAT geçişi için ücretsiz public STUN
+kullanılır. Sunucu yalnızca "kim hangi kanalda"yı bellekte tutar ve sinyali
+hedefe iletir — medya sunucudan geçmez, CPU maliyeti ~sıfır.
+
+- **Sesli kanal:** `+` ile metin/sesli seç, tıklayınca katıl. Kanal altında
+  canlı katılımcı listesi, konuşanın avatarında yeşil halka, mute/deafen
+  ikonları.
+- **Kontrol çubuğu:** alt kullanıcı çubuğunun üstünde sustur / kulaklık kapat /
+  ekran paylaş / ayrıl.
+- **Ekran paylaşımı:** kanaldaki **herkes** paylaşabilir (`getDisplayMedia`).
+  Video izi tüm eşlere eklenir; bağlantı **perfect negotiation** ile yeniden
+  müzakere edilir (cam kırılmasına/glare'a dayanıklı, küçük id impolite).
+  İzleyicide sahne ekranın çoğunu kaplar, tam ekran düğmesi var. Chrome'da
+  sekme/sistem sesi de paylaşılabilir.
+- **Yeniden bağlanma:** gateway kopup dönünce eşler otomatik yeniden kurulur.
+
+> **Sınır:** mesh ~4–6 kişiye kadar iyidir (herkes N−1 akış yükler; ekran
+> paylaşımı yükü artırır). Katı NAT / kurumsal güvenlik duvarı arkasındaki
+> kullanıcılar TURN olmadan bağlanamayabilir. Büyük odalar veya garantili
+> bağlantı gerekince coturn (TURN) ya da LiveKit SFU'ya yükseltilir — taşıma
+> katmanı bunun için soyut tutuldu.
+
+> **Zorunlu test (spec):** gerçek operatörlerde (Türk Telekom, Superonline,
+> Vodafone, mobil veri) gecikme ölçümü. Bu adım atlanırsa Faz 2–3 çöpe gider.
 
 ## Dosya yükleme
 
@@ -202,7 +238,9 @@ Bayat mesaj veya bayat izin göstermek, çevrimdışı çalışmamaktan kötüd�
 ## Yapılmayanlar (bilinçli)
 
 Thread, forum kanalı, özel emoji/sticker, bot API'si, webhook, sunucu keşfi,
-etkinlik, sahne kanalı. Sesli sohbet Faz 2, ekran paylaşımı Faz 3.
+etkinlik, sahne kanalı, webcam video. Ses tarafında **cihaz seçimi
+(mikrofon/hoparlör), bas-konuş (PTT) ve giriş hassasiyeti** henüz yok — mesh
+gerçek ağlarda doğrulandıktan sonra eklenecek cilalar.
 
 **E-posta** (`services/mail.ts`) — Brevo SMTP nodemailer ile bağlı. `.env`'e
 `SMTP_HOST=smtp-relay.brevo.com` + SMTP anahtarları girilince doğrulama ve
