@@ -38,6 +38,8 @@ export interface VoiceParticipant {
   user: PublicUser;
   selfMute: boolean;
   selfDeaf: boolean;
+  /** Ekran paylaşıyor mu. */
+  selfVideo: boolean;
 }
 
 interface AppState {
@@ -78,6 +80,10 @@ interface AppState {
   voiceSpeaking: Set<Snowflake>;
   selfMute: boolean;
   selfDeaf: boolean;
+  /** userId → ekran paylaşım akışı (video). Kendiminki de burada (önizleme). */
+  screenStreams: Map<Snowflake, MediaStream>;
+  /** Kendim ekran paylaşıyor muyum. */
+  selfSharing: boolean;
 
   setUser: (user: SelfUser | null) => void;
   setPendingActiveGuild: (guildId: Snowflake | null) => void;
@@ -127,6 +133,9 @@ interface AppState {
   setSpeaking: (userId: Snowflake, speaking: boolean) => void;
   setSelfMute: (value: boolean) => void;
   setSelfDeaf: (value: boolean) => void;
+  setSelfSharing: (value: boolean) => void;
+  /** Bir kullanıcının ekran akışını ayarla (null → kaldır). */
+  setScreenStream: (userId: Snowflake, stream: MediaStream | null) => void;
   /** Ses oturumunu tamamen sıfırla (ayrılırken). */
   resetVoiceSession: () => void;
 }
@@ -162,6 +171,8 @@ export const useStore = create<AppState>((set) => ({
   voiceSpeaking: new Set(),
   selfMute: false,
   selfDeaf: false,
+  screenStreams: new Map(),
+  selfSharing: false,
 
   setUser: (user) => set({ user }),
 
@@ -574,9 +585,26 @@ export const useStore = create<AppState>((set) => ({
 
   setSelfMute: (value) => set({ selfMute: value }),
   setSelfDeaf: (value) => set({ selfDeaf: value }),
+  setSelfSharing: (value) => set({ selfSharing: value }),
+
+  setScreenStream: (userId, stream) =>
+    set((state) => {
+      const screenStreams = new Map(state.screenStreams);
+      if (stream) screenStreams.set(userId, stream);
+      else screenStreams.delete(userId);
+      return { screenStreams };
+    }),
 
   resetVoiceSession: () =>
-    set({ voiceChannelId: null, voiceConnecting: false, selfMute: false, selfDeaf: false, voiceSpeaking: new Set() }),
+    set({
+      voiceChannelId: null,
+      voiceConnecting: false,
+      selfMute: false,
+      selfDeaf: false,
+      selfSharing: false,
+      voiceSpeaking: new Set(),
+      screenStreams: new Map(),
+    }),
 }));
 
 /**

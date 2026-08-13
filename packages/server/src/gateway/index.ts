@@ -85,7 +85,14 @@ export class Gateway {
    */
   private readonly voiceStates = new Map<
     string,
-    { channelId: string; guildId: string; selfMute: boolean; selfDeaf: boolean; user: PublicUser }
+    {
+      channelId: string;
+      guildId: string;
+      selfMute: boolean;
+      selfDeaf: boolean;
+      selfVideo: boolean;
+      user: PublicUser;
+    }
   >();
   /** Abone olunan Redis kanalları — tekrar abone olmamak için. */
   private readonly subscribed = new Set<string>();
@@ -368,10 +375,11 @@ export class Gateway {
     const channelId = String(payload.channelId);
     const existing = this.voiceStates.get(userIdValue);
 
-    // Aynı kanalda yalnızca mute/deafen değişimi.
+    // Aynı kanalda yalnızca mute/deafen/video değişimi.
     if (existing && existing.channelId === channelId) {
       existing.selfMute = payload.selfMute ?? existing.selfMute;
       existing.selfDeaf = payload.selfDeaf ?? existing.selfDeaf;
+      existing.selfVideo = payload.selfVideo ?? existing.selfVideo;
       await this.broadcastVoiceState(existing);
       return;
     }
@@ -399,6 +407,7 @@ export class Gateway {
       guildId,
       selfMute: payload.selfMute ?? false,
       selfDeaf: payload.selfDeaf ?? false,
+      selfVideo: payload.selfVideo ?? false,
       user: toPublicUser(row),
     };
     this.voiceStates.set(userIdValue, state);
@@ -413,6 +422,7 @@ export class Gateway {
           user: other.user,
           selfMute: other.selfMute,
           selfDeaf: other.selfDeaf,
+          selfVideo: other.selfVideo,
         });
       }
     }
@@ -430,7 +440,14 @@ export class Gateway {
 
   /** Ses durumunu kullanıcının sunucusundaki herkese yayınla. */
   private async broadcastVoiceState(
-    state: { channelId: string; guildId: string; selfMute: boolean; selfDeaf: boolean; user: PublicUser },
+    state: {
+      channelId: string;
+      guildId: string;
+      selfMute: boolean;
+      selfDeaf: boolean;
+      selfVideo: boolean;
+      user: PublicUser;
+    },
     left = false,
   ): Promise<void> {
     const envelope: EventEnvelope = {
@@ -442,6 +459,7 @@ export class Gateway {
         user: state.user,
         selfMute: state.selfMute,
         selfDeaf: state.selfDeaf,
+        selfVideo: state.selfVideo,
       },
       guildId: state.guildId,
     };

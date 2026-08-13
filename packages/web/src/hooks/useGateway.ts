@@ -123,6 +123,7 @@ export function useGateway(enabled: boolean): void {
             user: data.user,
             selfMute: data.selfMute,
             selfDeaf: data.selfDeaf,
+            selfVideo: data.selfVideo,
           });
           voice.onVoiceState(data);
           break;

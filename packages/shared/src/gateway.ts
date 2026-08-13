@@ -237,6 +237,8 @@ export interface VoiceStateOp {
   channelId: Snowflake | null;
   selfMute?: boolean;
   selfDeaf?: boolean;
+  /** Ekran paylaşıyor mu (video izi yayınlıyor). */
+  selfVideo?: boolean;
 }
 
 /** İstemci → sunucu (VOICE_SIGNAL op yükü). Hedef kullanıcıya iletilir. */
@@ -256,6 +258,7 @@ export interface VoiceStateUpdatePayload {
   user: PublicUser;
   selfMute: boolean;
   selfDeaf: boolean;
+  selfVideo: boolean;
 }
 
 /** Sunucu → istemci: bir eşten gelen WebRTC sinyali. */

@@ -1,17 +1,17 @@
 /**
- * Ses yöneticisi — mesh P2P WebRTC.
+ * Ses + ekran paylaşımı yöneticisi — mesh P2P WebRTC.
  *
- * Medya sunucusu yok: her katılımcı kanaldaki diğer herkese doğrudan bir
+ * Medya sunucusu yok: her katılımcı kanaldaki herkese doğrudan bir
  * RTCPeerConnection açar. Sinyalleşme (SDP/ICE) mevcut gateway WebSocket'i
  * üzerinden taşınır; NAT geçişi için ücretsiz public STUN kullanılır.
  *
- * Cam kırılması (glare) önleme: iki taraf da aynı anda teklif göndermesin
- * diye yalnızca userId'si küçük olan taraf teklifi başlatır. İki uçta da
- * aynı karşılaştırma çalıştığı için sonuç deterministik.
+ * Müzakere: "perfect negotiation" deseni. Ekran paylaşımı açmak/kapamak
+ * bağlantıyı yeniden müzakere ettirir (yeni video izi eklenir/çıkarılır);
+ * iki taraf da aynı anda teklif verirse çakışmayı polite/impolite kuralı
+ * çözer — küçük userId impolite, büyük polite.
  *
- * Sınır: ~6 kişiye kadar iyi çalışır (herkes N-1 akış yükler). Katı NAT
- * arkasındaki bazı kullanıcılar TURN olmadan bağlanamayabilir — ileride
- * coturn/LiveKit ile yükseltilir.
+ * Sınır: ~4-6 kişi (herkes N-1 akış yükler; ekran paylaşımı yükü artırır).
+ * Katı NAT arkasındaki bazı kullanıcılar TURN olmadan bağlanamayabilir.
  */
 
 import { GatewayOp, type VoiceSignalPayload, type VoiceStateUpdatePayload } from '@tuscord/shared';
@@ -19,35 +19,37 @@ import { gateway } from './gateway';
 import { useStore } from '../store';
 
 const ICE_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-  ],
+  iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }],
 };
 
 /** Ses seviyesi bu eşiği (0–1 RMS) aşarsa "konuşuyor" sayılır. */
 const SPEAKING_THRESHOLD = 0.045;
 
 type SignalMessage =
-  | { type: 'offer'; sdp: string }
-  | { type: 'answer'; sdp: string }
+  | { type: 'description'; description: RTCSessionDescriptionInit }
   | { type: 'candidate'; candidate: RTCIceCandidateInit };
 
 interface Peer {
   pc: RTCPeerConnection;
-  audio: HTMLAudioElement;
-  /** remoteDescription set edilmeden gelen ICE adayları burada bekler. */
-  pendingCandidates: RTCIceCandidateInit[];
+  /** Perfect negotiation: çakışmada geri adım atan taraf. */
+  polite: boolean;
+  makingOffer: boolean;
+  ignoreOffer: boolean;
+  /** streamId → ses elemanı (mikrofon + varsa ekran sesi ayrı akışlar). */
+  audios: Map<string, HTMLAudioElement>;
+  /** Konuşma analizi yapılan mikrofon akışı. */
   analyser?: AnalyserNode;
+  analyserStreamId?: string;
 }
 
 class VoiceManager {
   private channelId: string | null = null;
   private localStream: MediaStream | null = null;
+  private screenStream: MediaStream | null = null;
   private readonly peers = new Map<string, Peer>();
   private audioContext: AudioContext | null = null;
   private localAnalyser: AnalyserNode | null = null;
   private speakingRaf: number | null = null;
-  /** Tercih edilen mikrofon/hoparlör (cihaz seçiminden). */
   deviceIds: { mic?: string; speaker?: string } = {};
 
   get currentChannel(): string | null {
@@ -58,7 +60,8 @@ class VoiceManager {
     return useStore.getState().user?.id ?? '';
   }
 
-  /** Bir ses kanalına katıl. Zaten bir kanaldaysak önce ayrıl. */
+  /* -------- Katıl / ayrıl -------- */
+
   async join(channelId: string): Promise<void> {
     if (this.channelId === channelId) return;
     if (this.channelId) this.leave();
@@ -82,28 +85,22 @@ class VoiceManager {
     store.setVoiceConnecting(false);
     this.setupSpeakingDetection();
 
-    // Sunucuya katıldığımı bildir — roster'ı geri alacağım.
     gateway.sendOp(GatewayOp.VOICE_STATE, {
       channelId,
       selfMute: store.selfMute,
       selfDeaf: store.selfDeaf,
+      selfVideo: false,
     });
   }
 
-  /** Ses kanalından ayrıl — tüm eş bağlantılarını ve mikrofonu kapat. */
   leave(): void {
     if (!this.channelId) return;
     gateway.sendOp(GatewayOp.VOICE_STATE, { channelId: null });
 
-    for (const [peerId, peer] of this.peers) {
-      peer.pc.close();
-      peer.audio.srcObject = null;
-      peer.audio.remove();
-      useStore.getState().setSpeaking(peerId, false);
-    }
-    this.peers.clear();
+    this.stopScreenShareTracks();
+    for (const peerId of [...this.peers.keys()]) this.closePeer(peerId);
 
-    this.localStream?.getTracks().forEach((track) => track.stop());
+    this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     if (this.speakingRaf !== null) cancelAnimationFrame(this.speakingRaf);
     this.speakingRaf = null;
@@ -115,171 +112,232 @@ class VoiceManager {
     useStore.getState().resetVoiceSession();
   }
 
-  /** Gateway koptu ve döndü: aynı kanala yeniden duyur (eşler yeniden kurulur). */
   rejoinAfterReconnect(): void {
     if (!this.channelId) return;
     const store = useStore.getState();
-    // Eski eş bağlantıları büyük ihtimalle öldü; temizle, roster ile yeniden kurulur.
-    for (const [peerId, peer] of this.peers) {
-      peer.pc.close();
-      peer.audio.remove();
-      store.setSpeaking(peerId, false);
-    }
-    this.peers.clear();
+    for (const peerId of [...this.peers.keys()]) this.closePeer(peerId);
     gateway.sendOp(GatewayOp.VOICE_STATE, {
       channelId: this.channelId,
       selfMute: store.selfMute,
       selfDeaf: store.selfDeaf,
+      selfVideo: store.selfSharing,
     });
   }
+
+  /* -------- Mikrofon / kulaklık -------- */
 
   setMute(mute: boolean): void {
     const store = useStore.getState();
     store.setSelfMute(mute);
     this.applyLocalAudioEnabled();
     if (mute) store.setSpeaking(this.myId, false);
-    if (this.channelId) {
-      gateway.sendOp(GatewayOp.VOICE_STATE, { channelId: this.channelId, selfMute: mute, selfDeaf: store.selfDeaf });
-    }
+    this.announceState();
   }
 
   setDeaf(deaf: boolean): void {
     const store = useStore.getState();
     store.setSelfDeaf(deaf);
-    // Kulaklık kapalıysa duymadığın gibi konuşman da beklenmez — mikrofonu da kes.
     if (deaf) store.setSelfMute(true);
     this.applyLocalAudioEnabled();
-    // Uzak sesleri sustur/aç.
-    for (const peer of this.peers.values()) peer.audio.muted = deaf;
-    if (deaf) store.setSpeaking(this.myId, false);
-    if (this.channelId) {
-      gateway.sendOp(GatewayOp.VOICE_STATE, {
-        channelId: this.channelId,
-        selfMute: store.selfMute,
-        selfDeaf: deaf,
-      });
+    for (const peer of this.peers.values()) {
+      for (const audio of peer.audios.values()) audio.muted = deaf;
     }
+    if (deaf) store.setSpeaking(this.myId, false);
+    this.announceState();
   }
 
-  /** Mikrofonu store'daki mute/deafen durumuna göre aç/kapat. */
   private applyLocalAudioEnabled(): void {
     const { selfMute, selfDeaf } = useStore.getState();
     const enabled = !selfMute && !selfDeaf;
-    this.localStream?.getAudioTracks().forEach((track) => (track.enabled = enabled));
+    this.localStream?.getAudioTracks().forEach((t) => (t.enabled = enabled));
   }
 
-  /* -------- Gateway olayları (useGateway'den yönlendirilir) -------- */
+  /* -------- Ekran paylaşımı -------- */
 
-  /** Bir kullanıcının ses durumu değişti. Yalnızca kendi kanalımdaki eşleri yönetirim. */
+  async startScreenShare(): Promise<void> {
+    if (!this.channelId || this.screenStream) return;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: true, // Chrome sekme/sistem sesini de paylaşabilir; varsa gönderilir.
+      });
+    } catch {
+      return; // Kullanıcı iptal etti.
+    }
+    this.screenStream = stream;
+    useStore.getState().setSelfSharing(true);
+    useStore.getState().setScreenStream(this.myId, stream);
+
+    // İzleri tüm eşlere ekle → her ekleme yeniden müzakere tetikler.
+    for (const peer of this.peers.values()) {
+      for (const track of stream.getTracks()) peer.pc.addTrack(track, stream);
+    }
+
+    // Kullanıcı tarayıcının "paylaşımı durdur" düğmesine basarsa temizle.
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) videoTrack.onended = () => this.stopScreenShare();
+
+    this.announceState();
+  }
+
+  stopScreenShare(): void {
+    if (!this.screenStream) return;
+    const tracks = new Set(this.screenStream.getTracks());
+    // İlgili göndericileri her eşten çıkar → yeniden müzakere.
+    for (const peer of this.peers.values()) {
+      for (const sender of peer.pc.getSenders()) {
+        if (sender.track && tracks.has(sender.track)) peer.pc.removeTrack(sender);
+      }
+    }
+    this.stopScreenShareTracks();
+    useStore.getState().setSelfSharing(false);
+    useStore.getState().setScreenStream(this.myId, null);
+    this.announceState();
+  }
+
+  private stopScreenShareTracks(): void {
+    this.screenStream?.getTracks().forEach((t) => t.stop());
+    this.screenStream = null;
+  }
+
+  /** Güncel mute/deafen/video durumunu sunucuya duyur. */
+  private announceState(): void {
+    if (!this.channelId) return;
+    const store = useStore.getState();
+    gateway.sendOp(GatewayOp.VOICE_STATE, {
+      channelId: this.channelId,
+      selfMute: store.selfMute,
+      selfDeaf: store.selfDeaf,
+      selfVideo: store.selfSharing,
+    });
+  }
+
+  /* -------- Gateway olayları -------- */
+
   onVoiceState(payload: VoiceStateUpdatePayload): void {
     if (!this.channelId) return;
     const peerId = payload.userId;
     if (peerId === this.myId) return;
 
-    // Eş benim kanalımda değil (ayrıldı ya da başka kanal): bağlantıyı kapat.
     if (payload.channelId !== this.channelId) {
       this.closePeer(peerId);
       return;
     }
-
-    // Eş benim kanalımda: bağlantı yoksa kur. Küçük id teklifi başlatır.
-    if (!this.peers.has(peerId)) {
-      const peer = this.createPeer(peerId);
-      if (this.myId < peerId) void this.makeOffer(peerId, peer);
-    }
+    // Eş benim kanalımda: bağlantı yoksa kur (izler eklenince müzakere başlar).
+    if (!this.peers.has(peerId)) this.createPeer(peerId);
+    // Karşı taraf paylaşımı bıraktıysa ekranını temizle (iz sonu kaçarsa yedek).
+    if (!payload.selfVideo) useStore.getState().setScreenStream(peerId, null);
   }
 
-  /** Bir eşten SDP/ICE geldi. */
   async onSignal(payload: VoiceSignalPayload): Promise<void> {
     if (!this.channelId || String(payload.channelId) !== this.channelId) return;
     const peerId = payload.from;
-    const signal = payload.signal as SignalMessage;
     const peer = this.peers.get(peerId) ?? this.createPeer(peerId);
+    const signal = payload.signal as SignalMessage;
 
     try {
-      if (signal.type === 'offer') {
-        await peer.pc.setRemoteDescription({ type: 'offer', sdp: signal.sdp });
-        await this.drainCandidates(peer);
-        const answer = await peer.pc.createAnswer();
-        await peer.pc.setLocalDescription(answer);
-        this.sendSignal(peerId, { type: 'answer', sdp: answer.sdp ?? '' });
-      } else if (signal.type === 'answer') {
-        await peer.pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
-        await this.drainCandidates(peer);
+      if (signal.type === 'description') {
+        const description = signal.description;
+        const offerCollision =
+          description.type === 'offer' && (peer.makingOffer || peer.pc.signalingState !== 'stable');
+        peer.ignoreOffer = !peer.polite && offerCollision;
+        if (peer.ignoreOffer) return;
+
+        await peer.pc.setRemoteDescription(description);
+        if (description.type === 'offer') {
+          await peer.pc.setLocalDescription();
+          this.sendSignal(peerId, { type: 'description', description: peer.pc.localDescription!.toJSON() });
+        }
       } else if (signal.type === 'candidate') {
-        if (peer.pc.remoteDescription) await peer.pc.addIceCandidate(signal.candidate);
-        else peer.pendingCandidates.push(signal.candidate);
+        try {
+          await peer.pc.addIceCandidate(signal.candidate);
+        } catch (error) {
+          if (!peer.ignoreOffer) throw error;
+        }
       }
     } catch (error) {
       console.error('[voice] sinyal işlenemedi', error);
     }
   }
 
-  /* -------- İç mekanizma -------- */
+  /* -------- Eş bağlantı yönetimi -------- */
 
   private createPeer(peerId: string): Peer {
     const pc = new RTCPeerConnection(ICE_CONFIG);
-    const audio = new Audio();
-    audio.autoplay = true;
-    audio.muted = useStore.getState().selfDeaf;
-
-    const peer: Peer = { pc, audio, pendingCandidates: [] };
+    // Büyük id polite: çakışan teklifte geri adımı o atar.
+    const peer: Peer = { pc, polite: this.myId > peerId, makingOffer: false, ignoreOffer: false, audios: new Map() };
     this.peers.set(peerId, peer);
 
-    this.localStream?.getTracks().forEach((track) => pc.addTrack(track, this.localStream!));
+    pc.onnegotiationneeded = async () => {
+      try {
+        peer.makingOffer = true;
+        await pc.setLocalDescription();
+        this.sendSignal(peerId, { type: 'description', description: pc.localDescription!.toJSON() });
+      } catch (error) {
+        console.error('[voice] müzakere hatası', error);
+      } finally {
+        peer.makingOffer = false;
+      }
+    };
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate) this.sendSignal(peerId, { type: 'candidate', candidate: event.candidate.toJSON() });
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) this.sendSignal(peerId, { type: 'candidate', candidate: candidate.toJSON() });
     };
 
     pc.ontrack = (event) => {
       const [stream] = event.streams;
-      if (stream) {
-        audio.srcObject = stream;
-        this.attachRemoteAnalyser(peerId, stream);
+      if (!stream) return;
+      if (event.track.kind === 'video') {
+        useStore.getState().setScreenStream(peerId, stream);
+        event.track.onended = () => useStore.getState().setScreenStream(peerId, null);
+        stream.onremovetrack = () => {
+          if (stream.getVideoTracks().length === 0) useStore.getState().setScreenStream(peerId, null);
+        };
+      } else {
+        this.attachAudio(peer, peerId, stream);
       }
     };
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        // 'failed': ICE toparlanamadı. Eşi bırak; roster hâlâ göründüğü için
-        // kullanıcı yeniden katılmayı deneyebilir.
-        if (pc.connectionState === 'failed') this.closePeer(peerId);
-      }
+      if (pc.connectionState === 'failed') this.closePeer(peerId);
     };
+
+    // Mikrofon izini ekle → onnegotiationneeded tetiklenir, teklif akışı başlar.
+    this.localStream?.getTracks().forEach((t) => pc.addTrack(t, this.localStream!));
+    // Halihazırda ekran paylaşıyorsam, sonradan katılan bu eşe de gönder.
+    if (this.screenStream) {
+      for (const t of this.screenStream.getTracks()) pc.addTrack(t, this.screenStream);
+    }
 
     return peer;
   }
 
-  private async makeOffer(peerId: string, peer: Peer): Promise<void> {
-    try {
-      const offer = await peer.pc.createOffer();
-      await peer.pc.setLocalDescription(offer);
-      this.sendSignal(peerId, { type: 'offer', sdp: offer.sdp ?? '' });
-    } catch (error) {
-      console.error('[voice] teklif oluşturulamadı', error);
+  private attachAudio(peer: Peer, peerId: string, stream: MediaStream): void {
+    if (peer.audios.has(stream.id)) return;
+    const audio = new Audio();
+    audio.autoplay = true;
+    audio.muted = useStore.getState().selfDeaf;
+    audio.srcObject = stream;
+    peer.audios.set(stream.id, audio);
+    // İlk ses akışını mikrofon kabul edip konuşma analizine bağla.
+    if (!peer.analyser) {
+      this.attachRemoteAnalyser(peer, stream);
+      peer.analyserStreamId = stream.id;
     }
-  }
-
-  private async drainCandidates(peer: Peer): Promise<void> {
-    for (const candidate of peer.pendingCandidates) {
-      try {
-        await peer.pc.addIceCandidate(candidate);
-      } catch {
-        // Yoksay — geç gelen/çift aday.
-      }
-    }
-    peer.pendingCandidates = [];
   }
 
   private closePeer(peerId: string): void {
     const peer = this.peers.get(peerId);
     if (!peer) return;
     peer.pc.close();
-    peer.audio.srcObject = null;
-    peer.audio.remove();
+    for (const audio of peer.audios.values()) {
+      audio.srcObject = null;
+      audio.remove();
+    }
     this.peers.delete(peerId);
     useStore.getState().setSpeaking(peerId, false);
+    useStore.getState().setScreenStream(peerId, null);
   }
 
   private sendSignal(to: string, signal: SignalMessage): void {
@@ -287,11 +345,12 @@ class VoiceManager {
     gateway.sendOp(GatewayOp.VOICE_SIGNAL, { to, channelId: this.channelId, signal });
   }
 
-  /* -------- Konuşma tespiti (Web Audio) -------- */
+  /* -------- Konuşma tespiti -------- */
 
   private ensureAudioContext(): AudioContext {
     if (!this.audioContext) {
-      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const Ctor =
+        window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.audioContext = new Ctor();
     }
     return this.audioContext;
@@ -307,9 +366,7 @@ class VoiceManager {
     this.startSpeakingLoop();
   }
 
-  private attachRemoteAnalyser(peerId: string, stream: MediaStream): void {
-    const peer = this.peers.get(peerId);
-    if (!peer) return;
+  private attachRemoteAnalyser(peer: Peer, stream: MediaStream): void {
     const ctx = this.ensureAudioContext();
     const source = ctx.createMediaStreamSource(stream);
     const analyser = ctx.createAnalyser();
@@ -335,7 +392,6 @@ class VoiceManager {
     let lastTick = 0;
     const loop = (time: number) => {
       this.speakingRaf = requestAnimationFrame(loop);
-      // ~15/sn yeterli; her frame ölçmek gereksiz CPU.
       if (time - lastTick < 66) return;
       lastTick = time;
 
