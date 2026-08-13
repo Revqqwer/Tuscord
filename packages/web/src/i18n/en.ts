@@ -61,6 +61,12 @@ export const en = {
     undeafen: 'Undeafen',
     disconnect: 'Disconnect',
     micDenied: 'Microphone access denied',
+    share: 'Share screen',
+    stopShare: 'Stop sharing',
+    live: 'Live',
+    screens: '{{count}} screen(s) sharing',
+    you: 'You',
+    fullscreen: 'Fullscreen',
   },
   message: {
     placeholder: 'Message #{{channel}}',

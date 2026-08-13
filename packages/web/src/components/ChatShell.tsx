@@ -46,6 +46,7 @@ import { SearchModal } from './SearchModal';
 import { AdminPanel } from './AdminPanel';
 import { useContextMenu, type MenuItem } from './ContextMenu';
 import { VoiceChannelItem, VoiceControlBar } from './VoiceChannel';
+import { VoiceStage } from './VoiceStage';
 import { ChannelCreateModal } from './ChannelCreateModal';
 import type { APIChannel, APIFriendship } from '@tuscord/shared';
 
@@ -396,6 +397,9 @@ export function ChatShell() {
             </button>
           )}
         </header>
+
+        {/* Ekran paylaşımı sahnesi — ses kanalındayken aktif paylaşımlar. */}
+        <VoiceStage />
 
         {channel ? (
           <>

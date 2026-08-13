@@ -7,7 +7,17 @@
  */
 
 import { useTranslation } from 'react-i18next';
-import { Headphones, Mic, MicOff, PhoneOff, Volume2, VolumeX } from 'lucide-react';
+import {
+  Headphones,
+  Mic,
+  MicOff,
+  MonitorUp,
+  MonitorX,
+  PhoneOff,
+  ScreenShare,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import type { APIChannel } from '@tuscord/shared';
 import { useStore } from '../store';
 import { voice } from '../lib/voice';
@@ -20,6 +30,7 @@ export function VoiceChannelItem({
   channel: APIChannel;
   onNavigate: () => void;
 }) {
+  const { t } = useTranslation();
   const voiceChannelId = useStore((s) => s.voiceChannelId);
   const roster = useStore((s) => s.voiceStates.get(channel.id));
   const speaking = useStore((s) => s.voiceSpeaking);
@@ -79,6 +90,11 @@ export function VoiceChannelItem({
                   {p.user.displayName ?? p.user.username}
                 </span>
                 <span className="ml-auto flex shrink-0 items-center gap-1 text-[var(--color-ink-faint)]">
+                  {p.selfVideo ? (
+                    <span className="flex items-center gap-0.5 rounded bg-[var(--color-danger)]/15 px-1 text-[9px] font-bold uppercase text-[var(--color-danger)]">
+                      <ScreenShare size={10} /> {t('voice.live')}
+                    </span>
+                  ) : null}
                   {deaf ? <Headphones size={12} className="text-[var(--color-danger)]" /> : null}
                   {muted ? <MicOff size={12} className="text-[var(--color-danger)]" /> : null}
                 </span>
@@ -98,6 +114,7 @@ export function VoiceControlBar() {
   const connecting = useStore((s) => s.voiceConnecting);
   const selfMute = useStore((s) => s.selfMute);
   const selfDeaf = useStore((s) => s.selfDeaf);
+  const selfSharing = useStore((s) => s.selfSharing);
   const guilds = useStore((s) => s.guilds);
 
   if (!voiceChannelId && !connecting) return null;
@@ -142,6 +159,13 @@ export function VoiceControlBar() {
           onClick={() => voice.setDeaf(!selfDeaf)}
         >
           {selfDeaf ? <VolumeX size={16} /> : <Headphones size={16} />}
+        </ControlButton>
+        <ControlButton
+          active={selfSharing}
+          label={selfSharing ? t('voice.stopShare') : t('voice.share')}
+          onClick={() => (selfSharing ? voice.stopScreenShare() : void voice.startScreenShare())}
+        >
+          {selfSharing ? <MonitorX size={16} /> : <MonitorUp size={16} />}
         </ControlButton>
         <button
           type="button"

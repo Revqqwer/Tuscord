@@ -61,6 +61,12 @@ export const tr = {
     undeafen: 'Kulaklığı aç',
     disconnect: 'Bağlantıyı kes',
     micDenied: 'Mikrofon erişimi reddedildi',
+    share: 'Ekranı paylaş',
+    stopShare: 'Paylaşımı durdur',
+    live: 'Canlı',
+    screens: '{{count}} ekran paylaşılıyor',
+    you: 'Sen',
+    fullscreen: 'Tam ekran',
   },
   message: {
     placeholder: '#{{channel}} kanalına mesaj gönder',
