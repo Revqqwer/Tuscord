@@ -53,7 +53,6 @@ if (existingGuild) {
   console.log('Test sunucusu zaten var, atlanıyor.');
 } else {
   const guildId = nextId();
-  const categoryId = nextId();
   const generalId = nextId();
   const modChannelId = nextId();
   const modRoleId = nextId();
@@ -93,10 +92,13 @@ if (existingGuild) {
       },
     ]);
 
+    // Kategori YOK: kanal listesi kanalları tipine göre kendisi gruplayıp
+    // "Metin Kanalları" / "Ses Kanalları" başlıklarını çiziyor. Buraya bir
+    // "metin kanalları" kategorisi koymak, ekranda aynı isimde ikinci bir
+    // başlık üretirdi (bkz. migration 0003).
     await tx.insert(channels).values([
-      { id: categoryId, guildId, type: ChannelType.GUILD_CATEGORY, name: 'metin kanalları', position: 0 },
-      { id: generalId, guildId, type: ChannelType.GUILD_TEXT, name: 'genel', parentId: categoryId, position: 0 },
-      { id: modChannelId, guildId, type: ChannelType.GUILD_TEXT, name: 'mod-log', parentId: categoryId, position: 1 },
+      { id: generalId, guildId, type: ChannelType.GUILD_TEXT, name: 'genel', position: 0 },
+      { id: modChannelId, guildId, type: ChannelType.GUILD_TEXT, name: 'mod-log', position: 1 },
     ]);
 
     // mod-log: @everyone göremez, yalnızca Moderatör rolü görür.

@@ -1,52 +1,87 @@
 /**
- * Davet açılış ekranı: `/davet/<kod>`
+ * Davet açılış ekranı: `/davet/<token>`.
  *
- * Giriş yapmamış kullanıcı da sunucuyu görebilmeli — davet önizlemesi
- * herkese açık bir uçtan gelir. Katılma işlemi giriş gerektirir.
+ * `token` bir davet kodu (`9bKj4axx`) OLABİLECEĞİ GİBİ sunucu adı da
+ * olabilir (`/davet/Genel Sohbet`) — App.tsx ikisini ayrıştırmadan buraya
+ * verir. Önce davet kodu önizlemesi denenir; sunucu `unknown_invite`
+ * dönerse (kod yok/süresi dolmuş) token sunucu adı sayılıp ikinci bir
+ * önizleme denenir. İki önizleme de herkese açık, giriş gerektirmez —
+ * katılma (join) adımı gerektirir.
  */
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ApiError, api } from '../lib/api';
 
-interface InvitePreview {
-  code: string;
-  guild: { id: string; name: string; iconUrl: string | null; description: string | null };
-  memberCount: number;
+interface GuildSummary {
+  id: string;
+  name: string;
+  iconUrl: string | null;
+  description: string | null;
 }
 
+type Preview =
+  | { kind: 'code'; code: string; guild: GuildSummary; memberCount: number }
+  | { kind: 'name'; name: string; guild: GuildSummary; memberCount: number };
+
 interface Props {
-  code: string;
+  token: string;
   /** Oturum açık mı — kapalıysa önce giriş yapması söylenir. */
   authenticated: boolean;
   onJoined: (guildId: string) => void;
   onCancel: () => void;
 }
 
-export function InviteScreen({ code, authenticated, onJoined, onCancel }: Props) {
+export function InviteScreen({ token, authenticated, onJoined, onCancel }: Props) {
   const { t } = useTranslation();
-  const [preview, setPreview] = useState<InvitePreview | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void api
-      .get<InvitePreview>(`/invites/${code}`)
-      .then(setPreview)
-      .catch((caught) => {
-        setError(
-          caught instanceof ApiError && caught.status === 404
-            ? t('invite.invalid')
-            : t('common.error'),
+    let cancelled = false;
+    setPreview(null);
+    setError(null);
+
+    async function resolve() {
+      // Kod önizlemesini dene. Hata sebebi ÖNEMLİ DEĞİL — 404 (kod yok) kadar
+      // 400 (token 12 karakteri aşıyor, davet kodu şekline uymuyor) de burada
+      // düşer; ikisi de "bu bir davet kodu değil" anlamına gelir ve isim
+      // denemesine geçilir. Yalnızca 404'e bakmak, uzun sunucu adlarının
+      // (12+ karakter) hiç denenmeden "Hata" gösterip kalmasına yol açıyordu.
+      try {
+        const byCode = await api.get<{ guild: GuildSummary; memberCount: number }>(`/invites/${token}`);
+        if (!cancelled) setPreview({ kind: 'code', code: token, ...byCode });
+        return;
+      } catch {
+        // Devam — sunucu adı olarak dene.
+      }
+
+      try {
+        const byName = await api.get<{ guild: GuildSummary; memberCount: number }>(
+          `/guilds/preview/${encodeURIComponent(token)}`,
         );
-      });
-  }, [code, t]);
+        if (!cancelled) setPreview({ kind: 'name', name: token, ...byName });
+      } catch {
+        if (!cancelled) setError(t('invite.invalid'));
+      }
+    }
+
+    void resolve();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, t]);
 
   async function join() {
+    if (!preview) return;
     setBusy(true);
     setError(null);
     try {
-      const guild = await api.post<{ id: string }>(`/invites/${code}/join`);
+      const guild =
+        preview.kind === 'code'
+          ? await api.post<{ id: string }>(`/invites/${preview.code}/join`)
+          : await api.post<{ id: string }>('/guilds/join', { name: preview.name });
       onJoined(guild.id);
     } catch (caught) {
       const codeName = caught instanceof ApiError ? caught.code : 'unknown';

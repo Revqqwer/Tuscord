@@ -80,7 +80,16 @@ export async function buildApp(): Promise<FastifyInstance> {
     limits: { fileSize: Limits.ATTACHMENT_SIZE_MAX, files: 1, fields: 5 },
   });
 
-  app.decorate('rateLimiter', new RateLimiter({ redis }));
+  if (env.RATE_LIMIT_TRUSTED_IPS.length > 0) {
+    app.log.warn(
+      { ips: env.RATE_LIMIT_TRUSTED_IPS },
+      'RATE_LIMIT_TRUSTED_IPS ayarlı: bu IP\'ler için hız sınırı UYGULANMIYOR. Yayına çıkmadan boşalt.',
+    );
+  }
+  app.decorate(
+    'rateLimiter',
+    new RateLimiter({ redis, trustedSubjects: new Set(env.RATE_LIMIT_TRUSTED_IPS) }),
+  );
 
   app.decorate('requireAuth', async (request: FastifyRequest) => {
     await attachSession(request);

@@ -12,12 +12,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Shield, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Shield, Trash2, X } from 'lucide-react';
 import {
   ALL_PERMISSIONS,
+  ChannelType,
   PERMISSION_GROUPS,
   Permission,
   has,
+  type APIChannel,
   type APIGuildMember,
   type APIRole,
   type PermissionName,
@@ -39,6 +41,8 @@ export function RoleSettings({ guildState, onClose }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** "Görüntülenecek kanalları seç" akordeonu — rol değişince kapanmaz. */
+  const [channelPickerOpen, setChannelPickerOpen] = useState(false);
 
   const isOwner = currentUserId === guildState.guild.ownerId;
 
@@ -274,7 +278,7 @@ export function RoleSettings({ guildState, onClose }: Props) {
                         const enabled = has(BigInt(selected.permissions), bit);
                         // Sahip olmadığın izni veremezsin (sunucu da reddeder).
                         const cannotGrant = !has(ownPermissions, bit);
-                        return (
+                        const row = (
                           <PermissionRow
                             key={name}
                             name={t(`roles.permissions.${name}.name`)}
@@ -284,7 +288,30 @@ export function RoleSettings({ guildState, onClose }: Props) {
                             disabled={locked || saving || (cannotGrant && !enabled)}
                             hint={cannotGrant && !enabled ? t('roles.cannotGrant') : undefined}
                             onChange={(value) => togglePermission(name, value)}
+                            expandable={name === 'VIEW_CHANNEL'}
+                            expanded={name === 'VIEW_CHANNEL' ? channelPickerOpen : undefined}
+                            onToggleExpand={
+                              name === 'VIEW_CHANNEL'
+                                ? () => setChannelPickerOpen((v) => !v)
+                                : undefined
+                            }
                           />
+                        );
+                        // Seçici, VIEW_CHANNEL satırının hemen altında — o
+                        // satır yalnızca 'general' grubunda bir kez geçer.
+                        if (name !== 'VIEW_CHANNEL') return row;
+                        return (
+                          <div key={name}>
+                            {row}
+                            {channelPickerOpen && (
+                              <ChannelVisibilityPicker
+                                channels={guildState.channels}
+                                role={selected}
+                                disabled={locked || saving}
+                                onError={() => setError(t('common.error'))}
+                              />
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -309,6 +336,9 @@ function PermissionRow({
   danger,
   hint,
   onChange,
+  expandable,
+  expanded,
+  onToggleExpand,
 }: {
   name: string;
   description: string;
@@ -317,26 +347,183 @@ function PermissionRow({
   danger?: boolean;
   hint?: string;
   onChange: (value: boolean) => void;
+  /** Sağında aç/kapa oku olsun mu — yalnızca VIEW_CHANNEL için true. */
+  expandable?: boolean;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <label
-      title={hint}
+    <div
       className={`flex items-start gap-3 rounded px-2 py-1.5 ${
         disabled ? 'opacity-50' : 'hover:bg-[var(--color-surface-2)]'
       }`}
     >
-      <input
-        type="checkbox"
-        checked={checked}
+      <label title={hint} className="flex min-w-0 flex-1 items-start gap-3">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.checked)}
+          className="mt-1 h-4 w-4 accent-[var(--color-brand)]"
+        />
+        <span className="min-w-0">
+          <span className={`block text-sm ${danger ? 'text-[var(--color-danger)]' : ''}`}>{name}</span>
+          <span className="block text-xs text-[var(--color-ink-faint)]">{description}</span>
+        </span>
+      </label>
+      {expandable && (
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          aria-expanded={expanded}
+          aria-label={t('roles.channelPicker.toggle')}
+          title={t('roles.channelPicker.toggle')}
+          className="shrink-0 rounded p-1 text-[var(--color-ink-faint)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
+        >
+          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Görüntülenecek kanalları seç" — VIEW_CHANNEL satırının altında açılan
+ * panel. Metin kanalları solda, ses kanalları sağda; her kanal bu rol için
+ * ayrı bir onay kutusu. İşaretlemek/kaldırmak o kanalda role özel bir
+ * overwrite yazar (mevcut ChannelSettings overwrite editörüyle AYNI uç,
+ * yalnızca VIEW_CHANNEL bitini hedefler — diğer overwrite'lı izinlere
+ * dokunmaz).
+ */
+function ChannelVisibilityPicker({
+  channels,
+  role,
+  disabled,
+  onError,
+}: {
+  channels: readonly APIChannel[];
+  role: APIRole;
+  disabled: boolean;
+  onError: () => void;
+}) {
+  const { t } = useTranslation();
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const textChannels = channels
+    .filter((c) => c.type === ChannelType.GUILD_TEXT)
+    .sort((a, b) => a.position - b.position);
+  const voiceChannels = channels
+    .filter((c) => c.type === ChannelType.GUILD_VOICE)
+    .sort((a, b) => a.position - b.position);
+
+  function isVisible(channel: APIChannel): boolean {
+    const overwrite = channel.overwrites?.find(
+      (o) => o.targetType === 'role' && o.targetId === role.id,
+    );
+    if (overwrite) {
+      if (has(BigInt(overwrite.deny), Permission.VIEW_CHANNEL)) return false;
+      if (has(BigInt(overwrite.allow), Permission.VIEW_CHANNEL)) return true;
+    }
+    // Overwrite yok ya da VIEW_CHANNEL'a dokunmuyor: rolün kendi temel izni geçerli.
+    return has(BigInt(role.permissions), Permission.VIEW_CHANNEL);
+  }
+
+  async function toggle(channel: APIChannel, next: boolean) {
+    setBusyId(channel.id);
+    try {
+      const overwrite = channel.overwrites?.find(
+        (o) => o.targetType === 'role' && o.targetId === role.id,
+      );
+      let allow = overwrite ? BigInt(overwrite.allow) : 0n;
+      let deny = overwrite ? BigInt(overwrite.deny) : 0n;
+      if (next) {
+        allow |= Permission.VIEW_CHANNEL;
+        deny &= ~Permission.VIEW_CHANNEL;
+      } else {
+        deny |= Permission.VIEW_CHANNEL;
+        allow &= ~Permission.VIEW_CHANNEL;
+      }
+      await api.put(`/channels/${channel.id}/permissions/${role.id}`, {
+        targetType: 'role',
+        allow: allow.toString(),
+        deny: deny.toString(),
+      });
+      // Yeni durum CHANNEL_UPDATE gateway olayıyla geri gelir (bkz.
+      // channels.ts) ve `channels` prop'u store üzerinden tazelenir —
+      // burada elle bir yerel güncelleme gerekmiyor.
+    } catch {
+      onError();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="mb-2 ml-8 grid grid-cols-2 gap-4 rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] p-3">
+      <ChannelVisibilityColumn
+        title={t('roles.channelPicker.text')}
+        channels={textChannels}
+        isVisible={isVisible}
+        busyId={busyId}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-        className="mt-1 h-4 w-4 accent-[var(--color-brand)]"
+        onToggle={toggle}
       />
-      <span className="min-w-0">
-        <span className={`block text-sm ${danger ? 'text-[var(--color-danger)]' : ''}`}>{name}</span>
-        <span className="block text-xs text-[var(--color-ink-faint)]">{description}</span>
-      </span>
-    </label>
+      <ChannelVisibilityColumn
+        title={t('roles.channelPicker.voice')}
+        channels={voiceChannels}
+        isVisible={isVisible}
+        busyId={busyId}
+        disabled={disabled}
+        onToggle={toggle}
+      />
+    </div>
+  );
+}
+
+function ChannelVisibilityColumn({
+  title,
+  channels,
+  isVisible,
+  busyId,
+  disabled,
+  onToggle,
+}: {
+  title: string;
+  channels: APIChannel[];
+  isVisible: (channel: APIChannel) => boolean;
+  busyId: string | null;
+  disabled: boolean;
+  onToggle: (channel: APIChannel, next: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="min-w-0">
+      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+        {title}
+      </div>
+      {channels.length === 0 ? (
+        <p className="text-xs text-[var(--color-ink-faint)]">{t('roles.channelPicker.empty')}</p>
+      ) : (
+        <div className="space-y-0.5">
+          {channels.map((channel) => (
+            <label
+              key={channel.id}
+              className="flex items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-[var(--color-surface-3)]"
+            >
+              <input
+                type="checkbox"
+                checked={isVisible(channel)}
+                disabled={disabled || busyId === channel.id}
+                onChange={(event) => void onToggle(channel, event.target.checked)}
+                className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
+              />
+              <span className="truncate text-[var(--color-ink-muted)]">{channel.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

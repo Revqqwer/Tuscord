@@ -13,10 +13,23 @@ import { WalrusLoader } from './components/WalrusLoader';
  * Davet bağlantısı dışında tek ekranlı bir uygulama olduğu için router
  * kullanmıyoruz: tek bir yol kontrolü, bir kütüphane bağımlılığından ucuz.
  * Faz 1.5'te derin bağlantı (kanala/mesaja atlama) gerekirse router gelir.
+ *
+ * Segment davet kodu (`9bKj4axx`) OLABİLECEĞİ GİBİ sunucu adı da olabilir
+ * (`/davet/Deneme%20Sunucu`) — ikisi burada AYRIŞTIRILMAZ, tek bir metin
+ * olarak `InviteScreen`'e verilir; kod mu ad mı olduğuna sunucuya sorarak
+ * o karar verir. Eskiden yalnızca `[A-Za-z0-9_-]{4,12}` kabul edilirdi;
+ * boşluklu/Türkçe karakterli ya da 12 karakteri aşan sunucu adları hiç
+ * yakalanmıyor, path sessizce normal uygulamaya düşüyordu.
  */
-function inviteCodeFromPath(): string | null {
-  const match = /^\/(?:davet|invite)\/([A-Za-z0-9_-]{4,12})\/?$/.exec(location.pathname);
-  return match?.[1] ?? null;
+function inviteTokenFromPath(): string | null {
+  const match = /^\/(?:davet|invite)\/([^/]+)\/?$/.exec(location.pathname);
+  const segment = match?.[1];
+  if (!segment) return null;
+  try {
+    return decodeURIComponent(segment).trim() || null;
+  } catch {
+    return null; // Bozuk yüzde kaçışı (ör. tek başına "%").
+  }
 }
 
 export function App() {
@@ -24,7 +37,7 @@ export function App() {
   const user = useStore((state) => state.user);
   const setUser = useStore((state) => state.setUser);
   const [checking, setChecking] = useState(true);
-  const [inviteCode, setInviteCode] = useState<string | null>(() => inviteCodeFromPath());
+  const [inviteToken, setInviteToken] = useState<string | null>(() => inviteTokenFromPath());
 
   // Açılışta cookie geçerli mi: geçerliyse giriş ekranını hiç gösterme.
   useEffect(() => {
@@ -37,7 +50,7 @@ export function App() {
 
   // Geri/ileri tuşları davet ekranından çıkışı da yönetsin.
   useEffect(() => {
-    const onPopState = () => setInviteCode(inviteCodeFromPath());
+    const onPopState = () => setInviteToken(inviteTokenFromPath());
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
@@ -46,7 +59,7 @@ export function App() {
 
   function leaveInvite() {
     history.pushState({}, '', '/');
-    setInviteCode(null);
+    setInviteToken(null);
   }
 
   if (checking) {
@@ -57,10 +70,10 @@ export function App() {
     );
   }
 
-  if (inviteCode) {
+  if (inviteToken) {
     return (
       <InviteScreen
-        code={inviteCode}
+        token={inviteToken}
         authenticated={user !== null}
         onCancel={leaveInvite}
         onJoined={(guildId) => {

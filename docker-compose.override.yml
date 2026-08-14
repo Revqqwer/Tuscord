@@ -1,0 +1,10 @@
+# Yerel makinede 5432 ve 6379 zaten kurulu Postgres/Redis tarafından tutuluyor.
+# Compose bu dosyayı otomatik okur; container'lar çakışmayan portlara bağlanır.
+# .env içindeki DATABASE_URL / REDIS_URL bu portlara işaret eder.
+services:
+  postgres:
+    ports:
+      - "5433:5432"
+  redis:
+    ports:
+      - "6380:6379"

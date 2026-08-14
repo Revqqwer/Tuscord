@@ -69,6 +69,11 @@ interface AppState {
    */
   pendingActiveGuildId: Snowflake | null;
 
+  /** Sağdaki üye listesi paneli açık mı. localStorage'da kalıcı. */
+  memberListVisible: boolean;
+  /** 'all': çevrimdışılar da görünür. 'online': yalnızca çevrimiçiler. */
+  memberListMode: 'all' | 'online';
+
   /* ---- Ses (mesh P2P) ---- */
   /** Bağlı olduğum ses kanalı (yoksa null). */
   voiceChannelId: Snowflake | null;
@@ -87,6 +92,8 @@ interface AppState {
 
   setUser: (user: SelfUser | null) => void;
   setPendingActiveGuild: (guildId: Snowflake | null) => void;
+  setMemberListVisible: (visible: boolean) => void;
+  setMemberListMode: (mode: 'all' | 'online') => void;
   setStatus: (status: GatewayStatus) => void;
   applyReady: (
     user: SelfUser,
@@ -165,6 +172,9 @@ export const useStore = create<AppState>((set) => ({
   activeChannelId: null,
   pendingActiveGuildId: null,
 
+  memberListVisible: localStorage.getItem('tuscord.memberListVisible') !== 'false',
+  memberListMode: localStorage.getItem('tuscord.memberListMode') === 'online' ? 'online' : 'all',
+
   voiceChannelId: null,
   voiceConnecting: false,
   voiceStates: new Map(),
@@ -175,6 +185,16 @@ export const useStore = create<AppState>((set) => ({
   selfSharing: false,
 
   setUser: (user) => set({ user }),
+
+  setMemberListVisible: (visible) => {
+    localStorage.setItem('tuscord.memberListVisible', String(visible));
+    set({ memberListVisible: visible });
+  },
+
+  setMemberListMode: (mode) => {
+    localStorage.setItem('tuscord.memberListMode', mode);
+    set({ memberListMode: mode });
+  },
 
   /**
    * Sunucu zaten geldiyse hemen aç, gelmediyse beklemeye al.

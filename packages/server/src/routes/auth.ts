@@ -28,6 +28,7 @@ import { Errors } from '../lib/errors.js';
 import { nextId } from '../lib/id.js';
 import { env } from '../env.js';
 import { logTraffic } from '../services/compliance.js';
+import { emailDomainDeliverable } from '../services/email-domain.js';
 import { passwordResetMail, sendMail, verificationMail } from '../services/mail.js';
 import { toSelfUser } from '../services/serialize.js';
 import { requestIp } from '../app.js';
@@ -101,6 +102,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     await app.rateLimiter.consume('AUTH_REGISTER', ip);
 
     const body = registerBody.parse(request.body);
+
+    // Alan adı posta alamıyorsa doğrulama maili boşa gider ve hesap hiç
+    // açılamaz — kaydı en baştan reddet.
+    if (!(await emailDomainDeliverable(body.email))) {
+      throw Errors.badRequest(
+        'email_domain_invalid',
+        'Bu e-posta adresinin alan adı posta kabul etmiyor, adresi kontrol et',
+      );
+    }
 
     const existingEmail = await db.query.users.findFirst({
       where: eq(users.email, body.email),

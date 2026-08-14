@@ -33,7 +33,12 @@ export const Permission = {
   MANAGE_MESSAGES: 1n << 9n,
 
   // Yönetim
+  /** Kanal adı/konu/kilit/yavaş mod gibi GENEL ayarlar + silme. */
   MANAGE_CHANNELS: 1n << 10n,
+  /** Soldaki kanal listesinde kanalların/kategorilerin sırasını değiştirme. */
+  REORDER_CHANNELS: 1n << 25n,
+  CREATE_TEXT_CHANNELS: 1n << 26n,
+  CREATE_VOICE_CHANNELS: 1n << 27n,
   MANAGE_ROLES: 1n << 11n,
   MANAGE_NICKNAMES: 1n << 12n,
   MANAGE_GUILD: 1n << 13n,
@@ -93,6 +98,9 @@ const TIMEOUT_REVOKED: PermissionBits =
   Permission.CHANGE_NICKNAME |
   Permission.MANAGE_MESSAGES |
   Permission.MANAGE_CHANNELS |
+  Permission.REORDER_CHANNELS |
+  Permission.CREATE_TEXT_CHANNELS |
+  Permission.CREATE_VOICE_CHANNELS |
   Permission.MANAGE_ROLES |
   Permission.MANAGE_GUILD |
   Permission.KICK_MEMBERS |
@@ -131,8 +139,17 @@ export const PERMISSION_GROUPS = [
     permissions: ['KICK_MEMBERS', 'BAN_MEMBERS', 'MODERATE_MEMBERS', 'MANAGE_NICKNAMES'],
   },
   {
+    id: 'channels',
+    permissions: [
+      'CREATE_TEXT_CHANNELS',
+      'CREATE_VOICE_CHANNELS',
+      'REORDER_CHANNELS',
+      'MANAGE_CHANNELS',
+    ],
+  },
+  {
     id: 'management',
-    permissions: ['MANAGE_CHANNELS', 'MANAGE_ROLES', 'MANAGE_GUILD', 'VIEW_AUDIT_LOG'],
+    permissions: ['MANAGE_ROLES', 'MANAGE_GUILD', 'VIEW_AUDIT_LOG'],
   },
   {
     id: 'voice',
