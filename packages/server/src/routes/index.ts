@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../env.js';
 import { authRoutes } from './auth.js';
 import { userRoutes } from './users.js';
-import { guildRoutes } from './guilds.js';
+import { guildPreviewRoutes, guildRoutes } from './guilds.js';
 import { channelRoutes } from './channels.js';
 import { messageRoutes } from './messages.js';
 import { inviteRoutes } from './invites.js';
@@ -29,6 +29,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     async (api) => {
       await api.register(authRoutes);
       await api.register(userRoutes);
+      await api.register(guildPreviewRoutes);
       await api.register(guildRoutes);
       await api.register(channelRoutes);
       await api.register(messageRoutes);

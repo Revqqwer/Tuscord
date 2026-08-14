@@ -8,7 +8,8 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X } from 'lucide-react';
+import { AlertCircle, X } from 'lucide-react';
+import { Limits, guildNameError } from '@tuscord/shared';
 import { ApiError, api } from '../lib/api';
 
 interface Props {
@@ -34,7 +35,15 @@ export function GuildModal({ onClose, onDone }: Props) {
     setError(translated === key ? t('common.error') : translated);
   }
 
+  // Kanal adıyla aynı akış: sembol hatası anında, "çok kısa" oluşturmaya
+  // basınca. Bkz. ChannelCreateModal.
+  const [attempted, setAttempted] = useState(false);
+  const nameProblem = guildNameError(name);
+  const nameError = nameProblem === 'invalid_chars' || attempted ? nameProblem : null;
+
   async function create() {
+    setAttempted(true);
+    if (nameProblem !== null || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -53,12 +62,35 @@ export function GuildModal({ onClose, onDone }: Props) {
     setBusy(true);
     setError(null);
     try {
-      // Önce davet kodu ara (link ya da düz kod), yoksa sunucu adı.
-      const inviteCode = INVITE_IN_TEXT.exec(value)?.[1] ?? (/^[A-Za-z0-9_-]{6,12}$/.test(value) ? value : null);
-      const guild = inviteCode
-        ? await api.post<{ id: string }>(`/invites/${inviteCode}/join`)
-        : await api.post<{ id: string }>('/guilds/join', { name: value });
-      onDone(guild.id);
+      const explicitCode = INVITE_IN_TEXT.exec(value)?.[1];
+      if (explicitCode) {
+        // Girdi bir davet linki: kod belli, başka ihtimal yok.
+        const guild = await api.post<{ id: string }>(`/invites/${explicitCode}/join`);
+        onDone(guild.id);
+        return;
+      }
+
+      // Düz metin girildiğinde sunucu adı mı davet kodu mu belli değil —
+      // ikisi de alfasayısal ve uzunlukları örtüşüyor ("Deneme" hem geçerli
+      // bir sunucu adı hem de görünüşte bir davet kodu). Eskiden burada
+      // biçime bakan bir tahmin vardı; kısa/alfasayısal her sunucu adını
+      // (Discord tarzı çoğu ad böyledir) yanlışlıkla davet kodu sayıp
+      // "bulunamadı" veriyordu. Artık ÖNCE sunucu adı deneniyor — kullanıcı
+      // çoğunlukla bunu yazıyor — yalnızca `unknown_guild` dönerse ve girdi
+      // bir davet kodu gibi görünüyorsa (boşluksuz, kısa) ikinci ihtimal
+      // denenir.
+      try {
+        const guild = await api.post<{ id: string }>('/guilds/join', { name: value });
+        onDone(guild.id);
+      } catch (nameCaught) {
+        const looksLikeInviteCode = /^[A-Za-z0-9_-]{4,12}$/.test(value);
+        if (looksLikeInviteCode && nameCaught instanceof ApiError && nameCaught.code === 'unknown_guild') {
+          const guild = await api.post<{ id: string }>(`/invites/${value}/join`);
+          onDone(guild.id);
+          return;
+        }
+        throw nameCaught;
+      }
     } catch (caught) {
       showError(caught);
     } finally {
@@ -91,6 +123,22 @@ export function GuildModal({ onClose, onDone }: Props) {
           </button>
         </div>
 
+        {tab === 'create' && nameError && (
+          <p
+            role="alert"
+            aria-live="polite"
+            className="flex items-start gap-2 border-b border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-4 py-2.5 text-sm text-[var(--color-danger)]"
+          >
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>
+              {t(`guildModal.nameErrors.${nameError}`, {
+                min: Limits.GUILD_NAME_MIN,
+                max: Limits.GUILD_NAME_MAX,
+              })}
+            </span>
+          </p>
+        )}
+
         <div className="p-6">
           {tab === 'create' ? (
             <>
@@ -104,15 +152,21 @@ export function GuildModal({ onClose, onDone }: Props) {
               <input
                 autoFocus
                 value={name}
+                maxLength={Limits.GUILD_NAME_MAX}
+                aria-invalid={nameError !== null}
                 onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && name.trim() && void create()}
-                className="w-full rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 outline-none focus:border-[var(--color-brand)]"
+                onKeyDown={(e) => e.key === 'Enter' && void create()}
+                className={`w-full rounded border bg-[var(--color-surface-2)] px-3 py-2 outline-none ${
+                  nameError
+                    ? 'border-[var(--color-danger)] focus:border-[var(--color-danger)]'
+                    : 'border-[var(--color-line)] focus:border-[var(--color-brand)]'
+                }`}
               />
               {error && <p className="mt-2 text-sm text-[var(--color-danger)]">{error}</p>}
               <button
                 type="button"
                 onClick={() => void create()}
-                disabled={busy || name.trim().length < 2}
+                disabled={busy}
                 className="mt-5 w-full rounded bg-[var(--color-brand)] px-4 py-2 font-medium text-black transition hover:bg-[var(--color-brand-strong)] disabled:opacity-50"
               >
                 {t('guildModal.create')}

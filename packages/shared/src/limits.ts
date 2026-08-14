@@ -16,11 +16,11 @@ export const Limits = {
   PASSWORD_MIN: 8,
   PASSWORD_MAX: 128,
 
-  GUILD_NAME_MIN: 2,
-  GUILD_NAME_MAX: 100,
+  GUILD_NAME_MIN: 3,
+  GUILD_NAME_MAX: 20,
   GUILD_DESCRIPTION_MAX: 300,
-  CHANNEL_NAME_MIN: 1,
-  CHANNEL_NAME_MAX: 100,
+  CHANNEL_NAME_MIN: 3,
+  CHANNEL_NAME_MAX: 20,
   CHANNEL_TOPIC_MAX: 1024,
   ROLE_NAME_MAX: 100,
 
@@ -48,7 +48,7 @@ export const Limits = {
 export const RateLimits = {
   /** IP başına — kaba kuvvet parola denemesi. */
   AUTH_LOGIN: [10, 300],
-  AUTH_REGISTER: [5, 3600],
+  AUTH_REGISTER: [10, 3600],
   AUTH_PASSWORD_RESET: [3, 3600],
   /** Kullanıcı + kanal başına. Kanal yavaş modu bunun ÜSTÜNE uygulanır. */
   MESSAGE_CREATE: [10, 5],
@@ -76,19 +76,106 @@ export type RateLimitKey = keyof typeof RateLimits;
 export const USERNAME_PATTERN = /^[a-z0-9_.]{2,32}$/;
 
 /** Kanal adı: Discord gibi küçük harf ve tire. */
-export const CHANNEL_NAME_PATTERN = /^[a-z0-9\-_çğıöşü]{1,100}$/;
+export const CHANNEL_NAME_PATTERN = /^[a-z0-9\-_çğıöşü]{3,20}$/;
+
+/**
+ * Sunucu ve kanal adlarında izin verilen karakterler: harf (Türkçe dahil),
+ * rakam, boşluk, tire, alt çizgi. `! @ # \ /` gibi semboller ikisinde de
+ * reddedilir.
+ *
+ * Kural ortak, sonrası farklı: kanal adı ayrıca slug'a çevrilir (küçük harf,
+ * boşluk → tire), sunucu adı olduğu gibi saklanır — kullanıcıya gösterilen
+ * bir başlıktır ("Benim Sunucum").
+ */
+const NAME_ALLOWED = /^[\p{L}\p{N} \-_]+$/u;
 
 export const INVITE_CODE_PATTERN = /^[A-Za-z0-9]{6,12}$/;
+
+/**
+ * E-posta biçimi — istemcide anında geri bildirim için. Kasıtlı olarak basit:
+ * RFC 5322'yi tam karşılayan bir ifade okunaksızdır ve gerçek adresleri
+ * eler. Asıl kontroller sunucuda: zod `.email()`, ardından alan adının MX
+ * kaydı, ardından doğrulama e-postası.
+ */
+export const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
+
+export function isValidEmail(value: string): boolean {
+  return EMAIL_PATTERN.test(value.trim());
+}
 
 export function isValidUsername(value: string): boolean {
   return USERNAME_PATTERN.test(value);
 }
 
+/**
+ * Kanal adını slug'a çevirir. Uzunluk KIRPILMAZ — sınırı `channelNameError`
+ * uygular. Burada kırpmak 20 karakteri aşan adı sessizce kesiyor ve
+ * `too_long` uyarısının hiç görünmemesine yol açıyordu.
+ */
 export function normalizeChannelName(value: string): string {
   return value
     .trim()
     .toLocaleLowerCase('tr')
     .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9\-_çğıöşü]/g, '')
-    .slice(0, Limits.CHANNEL_NAME_MAX);
+    .replace(/[^a-z0-9\-_çğıöşü]/g, '');
+}
+
+/** Ad doğrulama hatası; istemcide `channel.errors.*` çeviri anahtarı. */
+export type NameError = 'invalid_chars' | 'too_short' | 'too_long' | null;
+
+/**
+ * Kanal adı reddedilme sebebi — `null` ise ad geçerli.
+ *
+ * Sembol kontrolü HAM girdide yapılır, normalize çıktısında değil: `genel!`
+ * normalize edilince `genel` olur ve geçerli görünürdü, yani `!` sessizce
+ * silinirdi. Kullanıcı yazdığı karakterin yok sayılmasını beklemiyor —
+ * uyarmak, sessizce düzeltmekten iyidir.
+ *
+ * Uzunluk kontrolü ise normalize edilmiş değerde yapılır: `@!\` ham hâlde
+ * uzunluk kontrolünü geçer ama geriye boş string kalır.
+ */
+export function channelNameError(value: string): NameError {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return 'too_short';
+  if (!NAME_ALLOWED.test(trimmed)) return 'invalid_chars';
+
+  const normalized = normalizeChannelName(value);
+  // İzin verilen kümede olup slug'a çevrilemeyen harfler (ör. Kiril) burada
+  // boşaltır — sebep uzunluk değil, karakterlerdir.
+  if (normalized.length === 0) return 'invalid_chars';
+  if (normalized.length < Limits.CHANNEL_NAME_MIN) return 'too_short';
+  if (normalized.length > Limits.CHANNEL_NAME_MAX) return 'too_long';
+  return null;
+}
+
+export function isValidChannelName(value: string): boolean {
+  return channelNameError(value) === null;
+}
+
+/** Sunucu adı: kenar boşlukları kırpılır, iç boşluklar teke indirilir. */
+export function normalizeGuildName(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * Sunucu adı reddedilme sebebi — `null` ise geçerli.
+ *
+ * Kanal adıyla AYNI hata türlerini döner ki iki ekran aynı uyarı metinlerini
+ * ve aynı akışı paylaşsın. Fark yalnızca izin verilen karakter kümesinde:
+ * sunucu adında boşluk ve büyük harf serbest, semboller değil.
+ *
+ * Kanal adının aksine geçersiz karakterler SESSİZCE SİLİNMEZ, reddedilir —
+ * kullanıcı "Sunucu!" yazdığında adın sessizce "Sunucu" olması sürpriz olur.
+ */
+export function guildNameError(value: string): NameError {
+  const normalized = normalizeGuildName(value);
+  if (normalized.length === 0) return 'too_short';
+  if (!NAME_ALLOWED.test(normalized)) return 'invalid_chars';
+  if (normalized.length < Limits.GUILD_NAME_MIN) return 'too_short';
+  if (normalized.length > Limits.GUILD_NAME_MAX) return 'too_long';
+  return null;
+}
+
+export function isValidGuildName(value: string): boolean {
+  return guildNameError(value) === null;
 }

@@ -70,6 +70,22 @@ const schema = z.object({
   TRAFFIC_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   ABUSE_CONTACT_EMAIL: z.string().default('abuse@localhost'),
 
+  /**
+   * Virgülle ayrılmış IP listesi — bu IP'ler için hız sınırı UYGULANMAZ.
+   * Geliştirme/test amaçlı: kendi IP'ni buraya ekleyip tekrar tekrar kayıt/
+   * giriş denesen bile 429 almazsın. Yayına çıkmadan boşaltmayı unutma —
+   * kimlik denemesi (brute force) korumasını devre dışı bırakır.
+   */
+  RATE_LIMIT_TRUSTED_IPS: z
+    .string()
+    .default('')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((ip) => ip.trim())
+        .filter((ip) => ip.length > 0),
+    ),
+
   // --- Görsel / CSAM taraması ---
   // 'none': tarama yok (yayına çıkmadan bir sağlayıcıyla kapatılmalı).
   // 'webhook': yüklenen görsel IMAGE_SCAN_WEBHOOK_URL'e POST edilir.

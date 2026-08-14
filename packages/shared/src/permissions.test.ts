@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   Permission,
+  PERMISSION_GROUPS,
   ALL_PERMISSIONS,
   DEFAULT_EVERYONE_PERMISSIONS,
   computeBasePermissions,
@@ -17,6 +18,7 @@ import {
   type MemberLike,
   type ChannelLike,
   type PermissionOverwriteLike,
+  type PermissionName,
 } from './permissions.js';
 
 const GUILD_ID = '100';
@@ -385,5 +387,23 @@ describe("saflık", () => {
     const m = member(ALICE, ["10"]);
     const c = channel([ow("10", "role", 0n, Permission.MANAGE_MESSAGES)]);
     expect(computePermissions(g, m, c)).toBe(computePermissions(g, m, c));
+  });
+});
+
+describe("PERMISSION_GROUPS", () => {
+  it("her izin TAM OLARAK BİR grupta görünür", () => {
+    // Rol Ayarları ekranı yalnızca buradan okuyor: bir izin hiçbir grupta
+    // yoksa arayüzde asla gösterilemez (rol atanamaz); iki grupta birden
+    // varsa çift satır olarak görünür. İkisi de kopyala-yapıştır sırasında
+    // olması kolay, sessiz hatalar.
+    const allNames = Object.keys(Permission) as PermissionName[];
+    const seen = new Map<PermissionName, string>();
+    for (const group of PERMISSION_GROUPS) {
+      for (const name of group.permissions) {
+        expect(seen.has(name), `${name} zaten "${seen.get(name)}" grubunda`).toBe(false);
+        seen.set(name, group.id);
+      }
+    }
+    expect([...seen.keys()].sort()).toEqual([...allNames].sort());
   });
 });

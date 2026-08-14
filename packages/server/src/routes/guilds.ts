@@ -12,6 +12,8 @@ import {
   Limits,
   Permission,
   computeBasePermissions,
+  guildNameError,
+  normalizeGuildName,
 } from '@tuscord/shared';
 import { db } from '../db/index.js';
 import { redis } from '../redis.js';
@@ -44,13 +46,17 @@ import { toAPIChannel, toAPIGuild, toAPIMember, toAPIRole } from '../services/se
 import { writeAuditLog } from '../services/audit.js';
 import { snowflakeParam } from '../lib/validate.js';
 
+/**
+ * Ad doğrulaması zod'da DEĞİL, `guildNameError` ile yapılır (bkz.
+ * `requireGuildName`); burada yalnızca kaba uzunluk sınırı var.
+ */
 const createGuildBody = z.object({
-  name: z.string().trim().min(Limits.GUILD_NAME_MIN).max(Limits.GUILD_NAME_MAX),
+  name: z.string().trim().min(1).max(Limits.GUILD_NAME_MAX),
   iconUrl: z.string().url().optional(),
 });
 
 const updateGuildBody = z.object({
-  name: z.string().trim().min(Limits.GUILD_NAME_MIN).max(Limits.GUILD_NAME_MAX).optional(),
+  name: z.string().trim().min(1).max(Limits.GUILD_NAME_MAX).optional(),
   description: z.string().trim().max(Limits.GUILD_DESCRIPTION_MAX).nullable().optional(),
   iconUrl: z.string().url().nullable().optional(),
   bannerUrl: z.string().url().nullable().optional(),
@@ -68,6 +74,74 @@ const roleBody = z.object({
   mentionable: z.boolean().optional(),
 });
 
+/**
+ * Sunucu adını doğrular ve normalize edilmiş hâlini döner. Hata kodları kanal
+ * adıyla ortak (`channel.errors.*` çevirileri) — kural da ortak.
+ */
+function requireGuildName(raw: string): string {
+  const error = guildNameError(raw);
+  if (error === 'too_short') {
+    throw Errors.badRequest(
+      'guild_name_too_short',
+      `Sunucu adı en az ${Limits.GUILD_NAME_MIN} karakter olmalı`,
+    );
+  }
+  if (error === 'invalid_chars') {
+    throw Errors.badRequest(
+      'guild_name_invalid_chars',
+      'Sunucu adı yalnızca harf, rakam, boşluk, tire ve alt çizgi içerebilir',
+    );
+  }
+  if (error === 'too_long') {
+    throw Errors.badRequest(
+      'guild_name_too_long',
+      `Sunucu adı en fazla ${Limits.GUILD_NAME_MAX} karakter olabilir`,
+    );
+  }
+  return normalizeGuildName(raw);
+}
+
+/**
+ * Herkese açık önizleme: `/davet/<sunucu adı>` akışı bunu kullanır.
+ *
+ * `guildRoutes` içindeki her rota `requireAuth` arkasında; bu yüzden
+ * ayrı bir plugin olarak KAYDEDİLMELİ (bkz. routes/index.ts) — aynı
+ * fonksiyona eklenirse hook'u miras alır ve giriş yapmamış ziyaretçi
+ * daveti önizleyemez.
+ *
+ * Davet kodu önizlemesiyle (`GET /invites/:code`) simetrik: giriş
+ * zorunlu değil, yalnızca `/guilds/join` (katılma) giriş ister. Bu yeni
+ * bir sızıntı yaratmaz — sunucu adıyla katılma zaten davetsiz, herkese
+ * açık bir özellik (bkz. `/guilds/join` yorumu).
+ */
+export async function guildPreviewRoutes(app: FastifyInstance): Promise<void> {
+  app.get('/guilds/preview/:name', async (request, reply) => {
+    const { name } = z
+      .object({ name: z.string().trim().min(1).max(Limits.GUILD_NAME_MAX) })
+      .parse(request.params);
+
+    const guild = await db.query.guilds.findFirst({
+      where: sql`lower(${guilds.name}) = lower(${normalizeGuildName(name)})`,
+    });
+    if (!guild) throw Errors.notFound('unknown_guild', 'Bu isimde bir sunucu yok');
+
+    const memberCount = await db
+      .select({ value: count() })
+      .from(guildMembers)
+      .where(eq(guildMembers.guildId, guild.id));
+
+    return reply.send({
+      guild: {
+        id: guild.id.toString(),
+        name: guild.name,
+        iconUrl: guild.iconUrl,
+        description: guild.description,
+      },
+      memberCount: memberCount[0]?.value ?? 0,
+    });
+  });
+}
+
 export async function guildRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', app.requireAuth);
 
@@ -78,6 +152,7 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
     await app.rateLimiter.consume('GUILD_CREATE', me.toString());
 
     const body = createGuildBody.parse(request.body);
+    const guildName = requireGuildName(body.name);
 
     const existing = await db
       .select({ value: count() })
@@ -89,7 +164,7 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
 
     // İsim benzersiz (isimle katılma için); büyük/küçük harf duyarsız kontrol.
     const nameTaken = await db.query.guilds.findFirst({
-      where: sql`lower(${guilds.name}) = lower(${body.name})`,
+      where: sql`lower(${guilds.name}) = lower(${guildName})`,
     });
     if (nameTaken) {
       throw Errors.conflict('guild_name_taken', 'Bu isimde bir sunucu zaten var');
@@ -97,12 +172,11 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
 
     const guildId = nextId();
     const generalId = nextId();
-    const textCategoryId = nextId();
 
     await db.transaction(async (tx) => {
       await tx.insert(guilds).values({
         id: guildId,
-        name: body.name,
+        name: guildName,
         iconUrl: body.iconUrl ?? null,
         ownerId: me,
         systemChannelId: generalId,
@@ -117,23 +191,15 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
         permissions: DEFAULT_EVERYONE_PERMISSIONS,
       });
 
-      await tx.insert(channels).values([
-        {
-          id: textCategoryId,
-          guildId,
-          type: ChannelType.GUILD_CATEGORY,
-          name: 'metin kanalları',
-          position: 0,
-        },
-        {
-          id: generalId,
-          guildId,
-          type: ChannelType.GUILD_TEXT,
-          name: 'genel',
-          parentId: textCategoryId,
-          position: 0,
-        },
-      ]);
+      // Kategorisiz, tek bir metin kanalı — sonradan elle oluşturulan
+      // kanallardan hiçbir farkı yok (özel bir kategoriye hapsedilmiyor).
+      await tx.insert(channels).values({
+        id: generalId,
+        guildId,
+        type: ChannelType.GUILD_TEXT,
+        name: 'genel',
+        position: 0,
+      });
 
       await tx.insert(guildMembers).values({ guildId, userId: me });
     });
@@ -163,11 +229,13 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
   app.post('/guilds/join', async (request, reply) => {
     const me = userId(request);
     const { name } = z
-      .object({ name: z.string().trim().min(Limits.GUILD_NAME_MIN).max(Limits.GUILD_NAME_MAX) })
+      .object({ name: z.string().trim().min(1).max(Limits.GUILD_NAME_MAX) })
       .parse(request.body);
 
+    // `normalizeGuildName` yalnızca kenar/iç boşlukları düzenler (bkz. tanım) —
+    // "  Deneme   Sunucu  " girdisi kayıtlı "Deneme Sunucu" ile eşleşsin.
     const guild = await db.query.guilds.findFirst({
-      where: sql`lower(${guilds.name}) = lower(${name})`,
+      where: sql`lower(${guilds.name}) = lower(${normalizeGuildName(name)})`,
     });
     if (!guild) throw Errors.notFound('unknown_guild', 'Bu isimde bir sunucu yok');
 
@@ -258,7 +326,7 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
     if (!before) throw Errors.notFound('unknown_guild', 'Sunucu bulunamadı');
 
     const patch: Record<string, unknown> = {};
-    if (body.name !== undefined) patch.name = body.name;
+    if (body.name !== undefined) patch.name = requireGuildName(body.name);
     if (body.description !== undefined) patch.description = body.description;
     if (body.iconUrl !== undefined) patch.iconUrl = body.iconUrl;
     if (body.bannerUrl !== undefined) patch.bannerUrl = body.bannerUrl;

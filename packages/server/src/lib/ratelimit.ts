@@ -34,6 +34,13 @@ export interface RateLimitResult {
 export interface RateLimiterOptions {
   /** Test edilebilirlik için: gerçek bir Redis yerine sahte istemci verilebilir. */
   redis: Pick<Redis, 'eval'>;
+  /**
+   * Bu değerlerle eşleşen `subject` için sınır hiç uygulanmaz — sayaç dahi
+   * artmaz. `subject` genelde IP olduğundan pratikte "güvenilir IP" demektir;
+   * kullanıcı id'siyle çağrılan kovalarda da aynı listeye bakılır (ör.
+   * geliştiricinin kendi hesabıyla mesaj/davet limitini aşabilmesi).
+   */
+  trustedSubjects?: ReadonlySet<string>;
 }
 
 export class RateLimiter {
@@ -45,6 +52,11 @@ export class RateLimiter {
    */
   async check(bucket: RateLimitKey, subject: string): Promise<RateLimitResult> {
     const [limit, windowSeconds] = RateLimits[bucket];
+
+    if (this.options.trustedSubjects?.has(subject)) {
+      return { allowed: true, remaining: limit, resetAfter: 0, limit };
+    }
+
     const key = RedisKeys.rateLimit(bucket, subject);
 
     const [count, ttl] = (await this.options.redis.eval(

@@ -10,6 +10,7 @@ import {
   GatewayEvent,
   Limits,
   Permission,
+  channelNameError,
   normalizeChannelName,
 } from '@tuscord/shared';
 import { db } from '../db/index.js';
@@ -28,8 +29,12 @@ import { toAPIChannel } from '../services/serialize.js';
 import { writeAuditLog } from '../services/audit.js';
 import { snowflakeParam } from '../lib/validate.js';
 
+/**
+ * Ad doğrulaması zod'da DEĞİL, normalize edilmiş değer üzerinde yapılır
+ * (bkz. `channelNameError`); burada yalnızca kaba uzunluk sınırı var.
+ */
 const createChannelBody = z.object({
-  name: z.string().trim().min(Limits.CHANNEL_NAME_MIN).max(Limits.CHANNEL_NAME_MAX),
+  name: z.string().trim().min(1).max(Limits.CHANNEL_NAME_MAX),
   type: z.union([
     z.literal(ChannelType.GUILD_TEXT),
     z.literal(ChannelType.GUILD_VOICE),
@@ -42,7 +47,7 @@ const createChannelBody = z.object({
 });
 
 const updateChannelBody = z.object({
-  name: z.string().trim().min(Limits.CHANNEL_NAME_MIN).max(Limits.CHANNEL_NAME_MAX).optional(),
+  name: z.string().trim().min(1).max(Limits.CHANNEL_NAME_MAX).optional(),
   topic: z.string().trim().max(Limits.CHANNEL_TOPIC_MAX).nullable().optional(),
   position: z.number().int().min(0).optional(),
   parentId: z.string().nullable().optional(),
@@ -57,6 +62,30 @@ const overwriteBody = z.object({
   deny: z.string().regex(/^\d+$/).default('0'),
 });
 
+/**
+ * Adı doğrular ve normalize edilmiş hâlini döner. Hata kodu istemcide
+ * `channel.errors.*` çeviri anahtarına karşılık gelir.
+ */
+function requireChannelName(raw: string): string {
+  const error = channelNameError(raw);
+  if (error === 'too_short') {
+    throw Errors.badRequest(
+      'channel_name_too_short',
+      `Kanal adı en az ${Limits.CHANNEL_NAME_MIN} karakter olmalı`,
+    );
+  }
+  if (error === 'invalid_chars') {
+    throw Errors.badRequest(
+      'channel_name_invalid_chars',
+      'Kanal adı yalnızca harf, rakam, tire ve alt çizgi içerebilir',
+    );
+  }
+  if (error === 'too_long') {
+    throw Errors.badRequest('channel_name_too_long', 'Kanal adı çok uzun');
+  }
+  return normalizeChannelName(raw);
+}
+
 export async function channelRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', app.requireAuth);
 
@@ -64,9 +93,21 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
     const me = userId(request);
     const guildId = snowflakeParam(request.params, 'guildId');
     const access = await requireGuildAccess(guildId, me);
-    assertPermission(access.permissions, Permission.MANAGE_CHANNELS);
 
     const body = createChannelBody.parse(request.body);
+
+    // Oluşturma izni tipe göre ayrılır: metin ve ses kanalı oluşturma ayrı
+    // izinler. Kategori bu ikisinin dışında — genel kanal ayarları izniyle
+    // (MANAGE_CHANNELS) korunur.
+    const creationPermission =
+      body.type === ChannelType.GUILD_TEXT
+        ? Permission.CREATE_TEXT_CHANNELS
+        : body.type === ChannelType.GUILD_VOICE
+          ? Permission.CREATE_VOICE_CHANNELS
+          : Permission.MANAGE_CHANNELS;
+    assertPermission(access.permissions, creationPermission);
+
+    const name = requireChannelName(body.name);
 
     const existing = await db
       .select({ value: count() })
@@ -92,7 +133,7 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
         id: channelId,
         guildId,
         type: body.type,
-        name: normalizeChannelName(body.name),
+        name,
         topic: body.topic ?? null,
         parentId,
         nsfw: body.nsfw ?? false,
@@ -142,11 +183,25 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
     const me = userId(request);
     const channelId = snowflakeParam(request.params, 'channelId');
     const access = await requireChannelAccess(channelId, me);
-    assertPermission(access.permissions, Permission.MANAGE_CHANNELS);
 
     const body = updateChannelBody.parse(request.body);
+
+    // Sıralama (position/parentId) ayrı bir izinle korunur: REORDER_CHANNELS.
+    // Ad/konu/kilit/yavaş mod gibi genel ayarlar MANAGE_CHANNELS ister. İstek
+    // ikisini birden değiştiriyorsa ikisi de gerekir — kısmi yetkiyle kısmi
+    // değişiklik sessizce uygulanmaz.
+    const changesOrder = body.position !== undefined || body.parentId !== undefined;
+    const changesGeneral =
+      body.name !== undefined ||
+      body.topic !== undefined ||
+      body.nsfw !== undefined ||
+      body.slowmodeSeconds !== undefined ||
+      body.locked !== undefined;
+    if (changesOrder) assertPermission(access.permissions, Permission.REORDER_CHANNELS);
+    if (changesGeneral) assertPermission(access.permissions, Permission.MANAGE_CHANNELS);
+
     const patch: Record<string, unknown> = {};
-    if (body.name !== undefined) patch.name = normalizeChannelName(body.name);
+    if (body.name !== undefined) patch.name = requireChannelName(body.name);
     if (body.topic !== undefined) patch.topic = body.topic;
     if (body.position !== undefined) patch.position = body.position;
     if (body.nsfw !== undefined) patch.nsfw = body.nsfw;
@@ -259,11 +314,18 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
     });
 
     // İzin değişti: istemcilerin kanal görünürlüğü de değişmiş olabilir,
-    // CHANNEL_UPDATE ile önbelleklerini tazelemelerini sağla.
+    // CHANNEL_UPDATE ile önbelleklerini tazelemelerini sağla. `includeOverwrites`
+    // ŞART — READY paketi zaten overwrite'ları tüm üyelere gönderiyor (bkz.
+    // readyGuild.ts), bunu atlamak yalnızca CHANNEL_UPDATE'i tutarsız kılar:
+    // istemcinin önbelleğindeki overwrite'lar sıfırlanır (yenisi gelmeden),
+    // Rol Ayarları'ndaki "görüntülenecek kanallar" seçici bu yüzden anlık
+    // güncellenmezdi.
     await publishToGuild({
       guildId: access.channel.guildId!.toString(),
       event: GatewayEvent.CHANNEL_UPDATE,
-      payload: toAPIChannel(access.channel),
+      payload: toAPIChannel(access.channel, {
+        includeOverwrites: (await loadChannelOverwrites(channelId)).overwrites,
+      }),
       channelId: channelId.toString(),
     });
     return reply.status(204).send();
@@ -296,7 +358,9 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
     await publishToGuild({
       guildId: access.channel.guildId!.toString(),
       event: GatewayEvent.CHANNEL_UPDATE,
-      payload: toAPIChannel(access.channel),
+      payload: toAPIChannel(access.channel, {
+        includeOverwrites: (await loadChannelOverwrites(channelId)).overwrites,
+      }),
       channelId: channelId.toString(),
     });
     return reply.status(204).send();

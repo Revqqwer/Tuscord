@@ -6,6 +6,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  ArrowDown,
+  ArrowUp,
   AtSign,
   Hash,
   Lock,
@@ -24,6 +26,7 @@ import {
   Permission,
   type APIGuildMember,
   type APIMessage,
+  type APIRole,
   type PresenceStatus,
   type PublicUser,
 } from '@tuscord/shared';
@@ -48,6 +51,7 @@ import { useContextMenu, type MenuItem } from './ContextMenu';
 import { VoiceChannelItem, VoiceControlBar } from './VoiceChannel';
 import { VoiceStage } from './VoiceStage';
 import { ChannelCreateModal } from './ChannelCreateModal';
+import { InviteLinkModal } from './InviteLinkModal';
 import type { APIChannel, APIFriendship } from '@tuscord/shared';
 
 export function ChatShell() {
@@ -235,7 +239,9 @@ export function ChatShell() {
   useEffect(() => {
     if (!activeGuildId) return;
     void api
-      .get<APIGuildMember[]>(`/guilds/${activeGuildId}/members?limit=200`)
+      // 1000: sunucunun izin verdiği tavan (bkz. guilds.ts) — üye listesi
+      // "sunucuya daha önce katılmış herkesi" göstermeli, ilk 200'le kesmemeli.
+      .get<APIGuildMember[]>(`/guilds/${activeGuildId}/members?limit=1000`)
       .then((list) => store.setMembers(activeGuildId, list))
       .catch(() => undefined);
 
@@ -394,6 +400,24 @@ export function ChatShell() {
               className="ml-auto rounded p-1.5 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
             >
               <Search size={18} />
+            </button>
+          )}
+          {/* Üye listesini göster/gizle — kapatınca panel kaybolur, bu düğme
+              her zaman görünür kalır ki geri açılabilsin. */}
+          {guildState && (
+            <button
+              type="button"
+              onClick={() => store.setMemberListVisible(!store.memberListVisible)}
+              aria-label={store.memberListVisible ? t('memberGroups.hide') : t('memberGroups.show')}
+              title={store.memberListVisible ? t('memberGroups.hide') : t('memberGroups.show')}
+              aria-pressed={store.memberListVisible}
+              className={`rounded p-1.5 hover:bg-[var(--color-surface-2)] ${
+                store.memberListVisible
+                  ? 'text-[var(--color-brand)]'
+                  : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+              }`}
+            >
+              <Users size={18} />
             </button>
           )}
         </header>
@@ -712,18 +736,46 @@ function ChannelList({ onNavigate }: NavProps) {
   const [rolesOpen, setRolesOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsChannel, setSettingsChannel] = useState<APIChannel | null>(null);
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  /** Sürüklenen kanalın id'si ve bırakılacak yuva — sürükle-bırak sıralama. */
+  const [dragChannelId, setDragChannelId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; edge: 'before' | 'after' } | null>(
+    null,
+  );
   const menu = useContextMenu();
   const state = activeGuildId ? guilds.get(activeGuildId) : undefined;
 
   /** Kanala sağ tık menüsü — yönetim izni olana ayarlar/sil. */
   function channelMenu(channel: APIChannel): MenuItem[] {
-    const items: MenuItem[] = [
-      {
+    const items: MenuItem[] = [];
+    // Kanal Ayarları'nı açmak MANAGE_CHANNELS gerektirir — sadece sıralama
+    // (REORDER_CHANNELS) izni olan bir role, kaydedemeyeceği bir ekranı
+    // gösterip sonra sunucudan 403 almasındansa hiç göstermeyelim.
+    if (canManage) {
+      items.push({
         label: t('channelSettings.open'),
         icon: <Settings size={15} />,
         onClick: () => setSettingsChannel(channel),
-      },
-    ];
+      });
+    }
+    if (canReorder) {
+      const siblings = siblingsOf(channel);
+      const index = siblings.findIndex((c) => c.id === channel.id);
+      items.push(
+        {
+          label: t('channel.moveUp'),
+          icon: <ArrowUp size={15} />,
+          disabled: index <= 0,
+          onClick: () => void moveChannel(channel, -1),
+        },
+        {
+          label: t('channel.moveDown'),
+          icon: <ArrowDown size={15} />,
+          disabled: index === -1 || index >= siblings.length - 1,
+          onClick: () => void moveChannel(channel, 1),
+        },
+      );
+    }
     return items;
   }
 
@@ -746,12 +798,21 @@ function ChannelList({ onNavigate }: NavProps) {
   const categories = state.channels
     .filter((c) => c.type === ChannelType.GUILD_CATEGORY)
     .sort((a, b) => a.position - b.position);
-  const uncategorized = state.channels.filter(
-    (c) => c.type !== ChannelType.GUILD_CATEGORY && !c.parentId,
-  );
+  // Kategorisiz kanallar artık TEK bir karışık liste değil, Discord'daki gibi
+  // METİN / SES olarak iki ayrı grupta gösteriliyor (bkz. sıralama yardımcıları
+  // aşağıda) — sıralama da grup içinde bağımsız.
+  const uncategorizedText = state.channels
+    .filter((c) => c.type === ChannelType.GUILD_TEXT && !c.parentId)
+    .sort((a, b) => a.position - b.position);
+  const uncategorizedVoice = state.channels
+    .filter((c) => c.type === ChannelType.GUILD_VOICE && !c.parentId)
+    .sort((a, b) => a.position - b.position);
 
   const guildPerms = BigInt(state.permissions);
   const canManage = can(guildPerms, Permission.MANAGE_CHANNELS);
+  const canReorder = can(guildPerms, Permission.REORDER_CHANNELS);
+  const canCreateText = can(guildPerms, Permission.CREATE_TEXT_CHANNELS);
+  const canCreateVoice = can(guildPerms, Permission.CREATE_VOICE_CHANNELS);
   const canManageRoles = can(guildPerms, Permission.MANAGE_ROLES);
   const canInvite = can(guildPerms, Permission.CREATE_INVITE);
   // Moderasyon düğmesi: bu izinlerden herhangi biri yeterli.
@@ -762,32 +823,163 @@ function ChannelList({ onNavigate }: NavProps) {
     can(guildPerms, Permission.VIEW_AUDIT_LOG) ||
     can(guildPerms, Permission.MANAGE_GUILD);
 
+  /**
+   * Bir kanalın "kardeşleri": aynı ebeveyn (kategori ya da kök). Kökteyse
+   * (parentId yok) METİN ve SES ayrı listelendiği için kardeşlik de tipe
+   * göre ayrılır — "yukarı taşı" bir metin kanalını bir ses kanalının
+   * üstüne geçirmez, kendi grubunda bir sıra kaydırır.
+   */
+  function siblingsOf(channel: APIChannel): APIChannel[] {
+    return state!.channels
+      .filter(
+        (c) =>
+          c.type !== ChannelType.GUILD_CATEGORY &&
+          c.parentId === channel.parentId &&
+          (channel.parentId !== null || c.type === channel.type),
+      )
+      .sort((a, b) => a.position - b.position);
+  }
+
+  /** İki kanal aynı sıralama grubunda mı — `siblingsOf` ile aynı kural. */
+  function sameReorderGroup(a: APIChannel, b: APIChannel): boolean {
+    if (a.parentId !== b.parentId) return false;
+    return a.parentId !== null || a.type === b.type;
+  }
+
+  /**
+   * Kanalı kendi grubunda `targetIndex` konumuna taşır.
+   *
+   * Pozisyonları TEK TEK TAKAS ETMEK yerine tüm kardeş grubu yeniden
+   * numaralandırıyoruz: yeni kanallar varsayılan olarak position=0 ile
+   * oluşturuluyor, yani çoğu kanalın pozisyonu aynı — iki eşit değeri takas
+   * etmek görünürde hiçbir şey değiştirmez.
+   */
+  async function moveChannelToIndex(channel: APIChannel, targetIndex: number) {
+    const siblings = siblingsOf(channel);
+    const index = siblings.findIndex((c) => c.id === channel.id);
+    if (index === -1 || targetIndex === index) return;
+    if (targetIndex < 0 || targetIndex >= siblings.length) return;
+
+    const reordered = [...siblings];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved!);
+
+    await Promise.all(
+      reordered.map((c, i) =>
+        c.position === i ? null : api.patch(`/channels/${c.id}`, { position: i }).catch(() => null),
+      ),
+    );
+  }
+
+  /** Bir sıra yukarı/aşağı (sağ tık menüsü). */
+  async function moveChannel(channel: APIChannel, direction: -1 | 1) {
+    const siblings = siblingsOf(channel);
+    const index = siblings.findIndex((c) => c.id === channel.id);
+    if (index === -1) return;
+    await moveChannelToIndex(channel, index + direction);
+  }
+
+  /**
+   * Sürüklenen kanalı hedefin üstüne/altına bırakır.
+   *
+   * `edge === 'after'` ise hedeften sonraki yuvaya gider. Sürüklenen kanal
+   * listeden çıkarıldığında kendisinden SONRAKİ tüm indeksler bir azalır;
+   * bu yüzden yukarıdan aşağı taşımada hedef indeksi bir geri çekiyoruz —
+   * atlanırsa kanal hep bir fazla ilerler.
+   */
+  async function dropChannelOn(target: APIChannel, edge: 'before' | 'after') {
+    const dragged = state!.channels.find((c) => c.id === dragChannelId);
+    if (!dragged || dragged.id === target.id) return;
+    if (!sameReorderGroup(dragged, target)) return;
+
+    const siblings = siblingsOf(dragged);
+    const from = siblings.findIndex((c) => c.id === dragged.id);
+    let to = siblings.findIndex((c) => c.id === target.id);
+    if (to === -1 || from === -1) return;
+    if (edge === 'after') to += 1;
+    if (from < to) to -= 1;
+    await moveChannelToIndex(dragged, to);
+  }
+
+  // Sağ tık menüsü ya genel ayarlar (canManage) ya da yalnızca sıralama
+  // (canReorder) için açılabilir — ikisinden biri yeterli.
+  const canOpenChannelMenu = canManage || canReorder;
+
   /** Kanalı tipine göre çiz: sesli kanal katıl/roster, metin kanalı buton. */
   function renderChannel(channel: APIChannel) {
-    if (channel.type === ChannelType.GUILD_VOICE) {
-      return (
-        <div
-          key={channel.id}
-          onContextMenu={canManage ? (e) => menu.open(e, channelMenu(channel)) : undefined}
-        >
-          <VoiceChannelItem channel={channel} onNavigate={onNavigate} />
-        </div>
+    const inner =
+      channel.type === ChannelType.GUILD_VOICE ? (
+        <VoiceChannelItem channel={channel} onNavigate={onNavigate} />
+      ) : (
+        <ChannelButton
+          name={channel.name ?? ''}
+          locked={channel.locked}
+          active={channel.id === activeChannelId}
+          unread={isUnread(channel)}
+          mentionCount={readStates.get(channel.id)?.mentionCount ?? 0}
+          onClick={() => {
+            setActive(state!.guild.id, channel.id);
+            onNavigate();
+          }}
+        />
       );
-    }
+
+    const dragged = dragChannelId
+      ? (state!.channels.find((c) => c.id === dragChannelId) ?? null)
+      : null;
+    // Bırakma çizgisi yalnızca AYNI grupta gösterilir: metin kanalını ses
+    // kanallarının arasına bırakmak sunucu tarafında da anlamsız olurdu.
+    const droppable =
+      dragged !== null && dragged.id !== channel.id && sameReorderGroup(dragged, channel);
+    const indicator = droppable && dropTarget?.id === channel.id ? dropTarget.edge : null;
+
     return (
-      <ChannelButton
+      <div
         key={channel.id}
-        name={channel.name ?? ''}
-        locked={channel.locked}
-        active={channel.id === activeChannelId}
-        unread={isUnread(channel)}
-        mentionCount={readStates.get(channel.id)?.mentionCount ?? 0}
-        onClick={() => {
-          setActive(state!.guild.id, channel.id);
-          onNavigate();
+        draggable={canReorder}
+        onContextMenu={canOpenChannelMenu ? (e) => menu.open(e, channelMenu(channel)) : undefined}
+        onDragStart={(e) => {
+          setDragChannelId(channel.id);
+          e.dataTransfer.effectAllowed = 'move';
+          // Firefox sürüklemeyi ancak veri taşındığında başlatır.
+          e.dataTransfer.setData('text/plain', channel.id);
         }}
-        onContextMenu={canManage ? (e) => menu.open(e, channelMenu(channel)) : undefined}
-      />
+        onDragEnd={() => {
+          setDragChannelId(null);
+          setDropTarget(null);
+        }}
+        onDragOver={(e) => {
+          if (!droppable) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          const box = e.currentTarget.getBoundingClientRect();
+          const edge = e.clientY < box.top + box.height / 2 ? 'before' : 'after';
+          if (dropTarget?.id !== channel.id || dropTarget.edge !== edge) {
+            setDropTarget({ id: channel.id, edge });
+          }
+        }}
+        onDragLeave={() => {
+          if (dropTarget?.id === channel.id) setDropTarget(null);
+        }}
+        onDrop={(e) => {
+          if (!droppable || !indicator) return;
+          e.preventDefault();
+          void dropChannelOn(channel, indicator);
+          setDragChannelId(null);
+          setDropTarget(null);
+        }}
+        className={`${canReorder ? 'cursor-grab active:cursor-grabbing' : ''} ${
+          dragChannelId === channel.id ? 'opacity-40' : ''
+        } ${
+          indicator === 'before'
+            ? 'border-t-2 border-[var(--color-brand)]'
+            : indicator === 'after'
+              ? 'border-b-2 border-[var(--color-brand)]'
+              : 'border-y-2 border-transparent'
+        }`}
+      >
+        {inner}
+      </div>
     );
   }
 
@@ -807,14 +999,7 @@ function ChannelList({ onNavigate }: NavProps) {
       .catch(() => null);
     if (!invite) return;
 
-    const url = `${location.origin}/davet/${invite.code}`;
-    // clipboard API güvenli bağlam ister; başarısız olursa linki yine göster.
-    try {
-      await navigator.clipboard.writeText(url);
-      alert(`${t('invite.copied')}\n\n${url}\n\n${t('invite.expires')}`);
-    } catch {
-      prompt(t('invite.copy'), url);
-    }
+    setInviteUrl(`${location.origin}/davet/${invite.code}`);
   }
 
   return (
@@ -858,7 +1043,7 @@ function ChannelList({ onNavigate }: NavProps) {
               <ShieldAlert size={16} className="text-[var(--color-ink-muted)] hover:text-[var(--color-brand)]" />
             </button>
           )}
-          {canManage && (
+          {(canCreateText || canCreateVoice) && (
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
@@ -872,8 +1057,15 @@ function ChannelList({ onNavigate }: NavProps) {
       </header>
 
       {createOpen && activeGuildId && (
-        <ChannelCreateModal guildId={activeGuildId} onClose={() => setCreateOpen(false)} />
+        <ChannelCreateModal
+          guildId={activeGuildId}
+          canCreateText={canCreateText}
+          canCreateVoice={canCreateVoice}
+          onClose={() => setCreateOpen(false)}
+        />
       )}
+
+      {inviteUrl && <InviteLinkModal url={inviteUrl} onClose={() => setInviteUrl(null)} />}
 
       {moderationOpen && (
         <ModerationPanel guildState={state} onClose={() => setModerationOpen(false)} />
@@ -882,7 +1074,23 @@ function ChannelList({ onNavigate }: NavProps) {
       {rolesOpen && <RoleSettings guildState={state} onClose={() => setRolesOpen(false)} />}
 
       <div className="flex-1 overflow-y-auto p-2">
-        {uncategorized.map(renderChannel)}
+        {uncategorizedText.length > 0 && (
+          <div>
+            <div className="px-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              {t('channel.textChannels')}
+            </div>
+            {uncategorizedText.map(renderChannel)}
+          </div>
+        )}
+
+        {uncategorizedVoice.length > 0 && (
+          <div className={uncategorizedText.length > 0 ? 'mt-3' : ''}>
+            <div className="px-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              {t('channel.voiceChannels')}
+            </div>
+            {uncategorizedVoice.map(renderChannel)}
+          </div>
+        )}
 
         {categories.map((category) => (
           <div key={category.id} className="mt-3">
@@ -910,6 +1118,7 @@ function ChannelList({ onNavigate }: NavProps) {
   );
 }
 
+/** Sağ tık menüsü ve sürükleme, saran kapsayıcıda ele alınır (bkz. renderChannel). */
 function ChannelButton({
   name,
   active,
@@ -917,7 +1126,6 @@ function ChannelButton({
   unread,
   mentionCount,
   onClick,
-  onContextMenu,
 }: {
   name: string;
   active: boolean;
@@ -925,13 +1133,11 @@ function ChannelButton({
   unread: boolean;
   mentionCount: number;
   onClick: () => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      onContextMenu={onContextMenu}
       className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm ${
         active
           ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
@@ -956,29 +1162,69 @@ function ChannelButton({
   );
 }
 
+/**
+ * Üye listesi gruplaması: sunucu sahibi hep en üstte (çevrimdışı olsa bile —
+ * "hep" burada gerçekten hep demek), sonra hoisted (ayrı gösterilen) roller
+ * pozisyona göre (yüksek pozisyon önce, bkz. `highestRolePosition`), her
+ * grup içinde ada göre sıralı. Bir üyenin birden fazla hoisted rolü varsa
+ * EN YÜKSEK pozisyonlu role göre gruplanır — iki grupta birden görünmez.
+ * Hiç hoisted rolü olmayan çevrimiçi üyeler "Çevrimiçi" havuzuna düşer.
+ * "Yalnızca çevrimiçi" modunda çevrimdışılar (sahip hariç) hiç gösterilmez.
+ */
+function groupMembers(
+  members: readonly APIGuildMember[],
+  roles: readonly APIRole[],
+  ownerId: string,
+  presence: Map<string, PresenceStatus>,
+  mode: 'all' | 'online',
+) {
+  const byName = (a: APIGuildMember, b: APIGuildMember) =>
+    (a.nickname ?? a.user.displayName ?? a.user.username).localeCompare(
+      b.nickname ?? b.user.displayName ?? b.user.username,
+      'tr',
+    );
+  const isOnline = (userId: string) => (presence.get(userId) ?? 'offline') !== 'offline';
+
+  const owner = members.find((m) => m.user.id === ownerId) ?? null;
+  const rest = members.filter((m) => m.user.id !== ownerId);
+
+  const hoisted = [...roles].filter((r) => r.hoist).sort((a, b) => b.position - a.position);
+  const roleGroups = hoisted.map((role) => ({ role, members: [] as APIGuildMember[] }));
+  const defaultOnline: APIGuildMember[] = [];
+  const offline: APIGuildMember[] = [];
+
+  for (const member of rest) {
+    if (!isOnline(member.user.id)) {
+      if (mode === 'all') offline.push(member);
+      continue;
+    }
+    const group = roleGroups.find((g) => member.roles.includes(g.role.id));
+    (group ? group.members : defaultOnline).push(member);
+  }
+
+  for (const group of roleGroups) group.members.sort(byName);
+  defaultOnline.sort(byName);
+  offline.sort(byName);
+
+  return { owner, roleGroups, defaultOnline, offline };
+}
+
 function MemberList({ onOpenProfile }: { onOpenProfile: (member: APIGuildMember) => void }) {
   const { t } = useTranslation();
-  const { members, activeGuildId, presence } = useStore();
+  const { members, guilds, activeGuildId, presence, memberListVisible, memberListMode, setMemberListMode } =
+    useStore();
   const list = activeGuildId ? (members.get(activeGuildId) ?? []) : [];
+  const guildState = activeGuildId ? guilds.get(activeGuildId) : undefined;
 
-  // Çevrimiçi/çevrimdışı iki ayrı grup (Discord kalıbı). Renkli nokta yerine
-  // altlı üstlü başlıklarla ayrılıyor; çevrimdışı üyeler soluk gösterilir.
-  const { online, offline } = useMemo(() => {
-    const byName = (a: APIGuildMember, b: APIGuildMember) =>
-      (a.nickname ?? a.user.displayName ?? a.user.username).localeCompare(
-        b.nickname ?? b.user.displayName ?? b.user.username,
-        'tr',
-      );
-    const online: APIGuildMember[] = [];
-    const offline: APIGuildMember[] = [];
-    for (const member of list) {
-      if ((presence.get(member.user.id) ?? 'offline') === 'offline') offline.push(member);
-      else online.push(member);
-    }
-    return { online: online.sort(byName), offline: offline.sort(byName) };
-  }, [list, presence]);
+  const grouped = useMemo(
+    () =>
+      guildState
+        ? groupMembers(list, guildState.roles, guildState.guild.ownerId, presence, memberListMode)
+        : null,
+    [list, guildState, presence, memberListMode],
+  );
 
-  if (!activeGuildId) return null;
+  if (!activeGuildId || !memberListVisible || !grouped) return null;
 
   return (
     <aside className="hidden w-60 shrink-0 flex-col bg-[var(--color-surface-1)] lg:flex">
@@ -986,33 +1232,90 @@ function MemberList({ onOpenProfile }: { onOpenProfile: (member: APIGuildMember)
         <Users size={16} />
         {t('guild.memberCount', { count: list.length })}
       </header>
+
+      <div className="flex items-center gap-1 border-b border-[var(--color-line)] px-2 py-2">
+        <ModeButton active={memberListMode === 'all'} onClick={() => setMemberListMode('all')}>
+          {t('memberGroups.showAll')}
+        </ModeButton>
+        <ModeButton active={memberListMode === 'online'} onClick={() => setMemberListMode('online')}>
+          {t('memberGroups.onlyOnline')}
+        </ModeButton>
+      </div>
+
       <div className="flex-1 overflow-y-auto p-2">
+        {grouped.owner && (
+          <MemberGroup
+            label={t('memberGroups.owner')}
+            members={[grouped.owner]}
+            presence={presence}
+            onOpenProfile={onOpenProfile}
+          />
+        )}
+        {grouped.roleGroups.map(({ role, members: roleMembers }) => (
+          <MemberGroup
+            key={role.id}
+            label={`${role.name} — ${roleMembers.length}`}
+            labelColor={role.color ? `#${role.color.toString(16).padStart(6, '0')}` : undefined}
+            members={roleMembers}
+            presence={presence}
+            onOpenProfile={onOpenProfile}
+          />
+        ))}
         <MemberGroup
-          label={t('memberGroups.online', { count: online.length })}
-          members={online}
+          label={t('memberGroups.online', { count: grouped.defaultOnline.length })}
+          members={grouped.defaultOnline}
           presence={presence}
           onOpenProfile={onOpenProfile}
         />
-        <MemberGroup
-          label={t('memberGroups.offline', { count: offline.length })}
-          members={offline}
-          presence={presence}
-          dim
-          onOpenProfile={onOpenProfile}
-        />
+        {memberListMode === 'all' && (
+          <MemberGroup
+            label={t('memberGroups.offline', { count: grouped.offline.length })}
+            members={grouped.offline}
+            presence={presence}
+            dim
+            onOpenProfile={onOpenProfile}
+          />
+        )}
       </div>
     </aside>
   );
 }
 
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`rounded px-2 py-1 text-xs font-medium transition ${
+        active
+          ? 'bg-[var(--color-brand)]/15 text-[var(--color-brand)]'
+          : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function MemberGroup({
   label,
+  labelColor,
   members,
   presence,
   dim,
   onOpenProfile,
 }: {
   label: string;
+  labelColor?: string;
   members: APIGuildMember[];
   presence: Map<string, 'online' | 'idle' | 'dnd' | 'offline'>;
   dim?: boolean;
@@ -1021,7 +1324,10 @@ function MemberGroup({
   if (members.length === 0) return null;
   return (
     <div className="mb-3">
-      <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+      <div
+        className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]"
+        style={labelColor ? { color: labelColor } : undefined}
+      >
         {label}
       </div>
       {members.map((member) => (

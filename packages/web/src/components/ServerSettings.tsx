@@ -5,8 +5,8 @@
 
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Camera, Trash2, X } from 'lucide-react';
-import { Limits, type APIGuild } from '@tuscord/shared';
+import { AlertCircle, Camera, Trash2, X } from 'lucide-react';
+import { Limits, guildNameError, type APIGuild } from '@tuscord/shared';
 import { api } from '../lib/api';
 import { useStore, type GuildState } from '../store';
 import { Avatar } from './Avatar';
@@ -49,7 +49,14 @@ export function ServerSettings({ guildState, onClose }: Props) {
     upsertGuild({ ...guildState, guild: updated });
   }
 
+  // Sembolde anında, kısalıkta kaydetmeye basınca uyar (bkz. GuildModal).
+  const [attempted, setAttempted] = useState(false);
+  const nameProblem = guildNameError(name);
+  const nameError = nameProblem === 'invalid_chars' || attempted ? nameProblem : null;
+
   async function save() {
+    setAttempted(true);
+    if (nameProblem !== null) return;
     setSaving(true);
     setError(null);
     try {
@@ -87,6 +94,22 @@ export function ServerSettings({ guildState, onClose }: Props) {
           </button>
         </header>
 
+        {nameError && (
+          <p
+            role="alert"
+            aria-live="polite"
+            className="flex items-start gap-2 border-b border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-4 py-2.5 text-sm text-[var(--color-danger)]"
+          >
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>
+              {t(`guildModal.nameErrors.${nameError}`, {
+                min: Limits.GUILD_NAME_MIN,
+                max: Limits.GUILD_NAME_MAX,
+              })}
+            </span>
+          </p>
+        )}
+
         <div className="space-y-5 p-5">
           {/* Banner */}
           <button
@@ -117,8 +140,14 @@ export function ServerSettings({ guildState, onClose }: Props) {
               </label>
               <input
                 value={name}
+                maxLength={Limits.GUILD_NAME_MAX}
+                aria-invalid={nameError !== null}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 outline-none focus:border-[var(--color-brand)]"
+                className={`w-full rounded border bg-[var(--color-surface-2)] px-3 py-2 outline-none ${
+                  nameError
+                    ? 'border-[var(--color-danger)] focus:border-[var(--color-danger)]'
+                    : 'border-[var(--color-line)] focus:border-[var(--color-brand)]'
+                }`}
               />
             </div>
           </div>

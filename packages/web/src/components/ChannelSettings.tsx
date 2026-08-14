@@ -8,10 +8,11 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Hash, Minus, Plus, Trash2, X } from 'lucide-react';
+import { AlertCircle, Hash, Minus, Plus, Trash2, X } from 'lucide-react';
 import {
   Limits,
   Permission,
+  channelNameError,
   has,
   type APIChannel,
   type APIPermissionOverwrite,
@@ -65,7 +66,15 @@ export function ChannelSettings({ channel, roles, onClose }: Props) {
     }
   }, [channel.id]);
 
+  // Sunucu ile aynı kural; sembolde anında, kısalıkta kaydetmeye basınca uyar
+  // (bkz. ChannelCreateModal).
+  const [attempted, setAttempted] = useState(false);
+  const nameProblem = channelNameError(name);
+  const nameError = nameProblem === 'invalid_chars' || attempted ? nameProblem : null;
+
   async function saveOverview() {
+    setAttempted(true);
+    if (nameProblem !== null) return;
     setSaving(true);
     try {
       const updated = await api.patch<APIChannel>(`/channels/${channel.id}`, {
@@ -161,14 +170,36 @@ export function ChannelSettings({ channel, roles, onClose }: Props) {
           </TabBtn>
         </nav>
 
+        {tab === 'overview' && nameError && (
+          <p
+            role="alert"
+            aria-live="polite"
+            className="flex items-start gap-2 border-b border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-4 py-2.5 text-sm text-[var(--color-danger)]"
+          >
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>
+              {t(`channel.errors.${nameError}`, {
+                min: Limits.CHANNEL_NAME_MIN,
+                max: Limits.CHANNEL_NAME_MAX,
+              })}
+            </span>
+          </p>
+        )}
+
         <div className="flex-1 overflow-y-auto p-4">
           {tab === 'overview' ? (
             <div className="space-y-4">
               <Field label={t('channelSettings.name')}>
                 <input
                   value={name}
+                  maxLength={Limits.CHANNEL_NAME_MAX}
+                  aria-invalid={nameError !== null}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 outline-none focus:border-[var(--color-brand)]"
+                  className={`w-full rounded border bg-[var(--color-surface-2)] px-3 py-2 outline-none ${
+                    nameError
+                      ? 'border-[var(--color-danger)] focus:border-[var(--color-danger)]'
+                      : 'border-[var(--color-line)] focus:border-[var(--color-brand)]'
+                  }`}
                 />
               </Field>
               <Field label={t('channelSettings.topic')}>

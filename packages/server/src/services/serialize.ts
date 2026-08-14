@@ -80,7 +80,7 @@ export function toAPIRole(role: Role): APIRole {
 
 export interface ChannelSerializeOptions {
   /** MANAGE_CHANNELS izni varsa overwrite'lar da gönderilir. */
-  includeOverwrites?: Array<{ targetId: string; targetType: 'role' | 'member'; allow: bigint; deny: bigint }>;
+  includeOverwrites?: ReadonlyArray<{ targetId: string; targetType: 'role' | 'member'; allow: bigint; deny: bigint }>;
   recipients?: PublicUser[];
 }
 
