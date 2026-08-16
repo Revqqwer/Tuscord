@@ -6,6 +6,7 @@ import { useStore } from './store';
 import { useGateway } from './hooks/useGateway';
 import { AuthScreen } from './components/AuthScreen';
 import { ChatShell } from './components/ChatShell';
+import { Homepage } from './components/Homepage';
 import { InviteScreen } from './components/InviteScreen';
 import { WalrusLoader } from './components/WalrusLoader';
 
@@ -32,12 +33,24 @@ function inviteTokenFromPath(): string | null {
   }
 }
 
+/**
+ * `tuscord.com` kök yolu, giriş yapmamış ziyaretçiyi artık doğrudan giriş
+ * ekranıyla karşılamıyor — önce discord.com tarzı bir açılış sayfası var
+ * (bkz. Homepage.tsx). `/login`'e (ya da TR eşdeğerine) gelen istek giriş
+ * ekranını ister; bu, açılış sayfasındaki "Giriş Yap" / "Tarayıcıda Aç"
+ * butonlarının gittiği yer.
+ */
+function wantsAuthScreen(): boolean {
+  return /^\/(login|giris|register|kaydol)\/?$/.test(location.pathname);
+}
+
 export function App() {
   const { t } = useTranslation();
   const user = useStore((state) => state.user);
   const setUser = useStore((state) => state.setUser);
   const [checking, setChecking] = useState(true);
   const [inviteToken, setInviteToken] = useState<string | null>(() => inviteTokenFromPath());
+  const [showAuth, setShowAuth] = useState(() => wantsAuthScreen());
 
   // Açılışta cookie geçerli mi: geçerliyse giriş ekranını hiç gösterme.
   useEffect(() => {
@@ -48,9 +61,12 @@ export function App() {
       .finally(() => setChecking(false));
   }, [setUser]);
 
-  // Geri/ileri tuşları davet ekranından çıkışı da yönetsin.
+  // Geri/ileri tuşları davet ekranından ve giriş ekranından çıkışı da yönetsin.
   useEffect(() => {
-    const onPopState = () => setInviteToken(inviteTokenFromPath());
+    const onPopState = () => {
+      setInviteToken(inviteTokenFromPath());
+      setShowAuth(wantsAuthScreen());
+    };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
@@ -60,6 +76,18 @@ export function App() {
   function leaveInvite() {
     history.pushState({}, '', '/');
     setInviteToken(null);
+  }
+
+  /** Açılış sayfasındaki iki buton da buraya çıkıyor — ikisi de aynı hedefe gider. */
+  function enterAuthScreen() {
+    if (!wantsAuthScreen()) history.pushState({}, '', '/login');
+    setShowAuth(true);
+  }
+
+  /** Giriş başarılı: adres çubuğunu köke döndür, kullanıcıyı ata. */
+  function handleAuthenticated(authedUser: SelfUser) {
+    if (wantsAuthScreen()) history.pushState({}, '', '/');
+    setUser(authedUser);
   }
 
   if (checking) {
@@ -86,7 +114,10 @@ export function App() {
     );
   }
 
-  if (!user) return <AuthScreen onAuthenticated={setUser} />;
+  if (!user) {
+    if (showAuth) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+    return <Homepage onEnter={enterAuthScreen} />;
+  }
 
   return <ChatShell />;
 }

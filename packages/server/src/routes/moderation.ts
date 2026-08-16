@@ -9,9 +9,18 @@
 import type { FastifyInstance } from 'fastify';
 import { and, desc, eq, gte, isNull } from 'drizzle-orm';
 import { z } from 'zod';
-import { GatewayEvent, Limits, Permission, has } from '@tuscord/shared';
+import { ChannelType, GatewayEvent, Limits, Permission, has } from '@tuscord/shared';
 import { db } from '../db/index.js';
-import { bans, guildMembers, guilds, memberRoles, messages, reports, users } from '../db/schema.js';
+import {
+  bans,
+  channels,
+  guildMembers,
+  guilds,
+  memberRoles,
+  messages,
+  reports,
+  users,
+} from '../db/schema.js';
 import { Errors } from '../lib/errors.js';
 import { nextId } from '../lib/id.js';
 import { userId } from '../app.js';
@@ -88,6 +97,114 @@ export async function moderationRoutes(app: FastifyInstance): Promise<void> {
         },
       });
     }
+    return reply.status(204).send();
+  });
+
+  /* ---------------- Sesli kanalda sustur (server mute) ---------------- */
+
+  /**
+   * Bir kullanıcıyı sesli kanalda susturur/susturmasını kaldırır.
+   *
+   * ÖNEMLİ SINIR: bu uygulama medya sunucusu OLMAYAN mesh P2P WebRTC
+   * kullanıyor (bkz. voice.ts). Ses akışı doğrudan katılımcılar arasında
+   * gidiyor, sunucudan geçmiyor — yani bu, iyi niyetli istemciler için
+   * ÇALIŞAN ama kriptografik olarak ZORLANAMAYAN bir istek. Hedefin
+   * istemcisi olayı alıp kendi mikrofonunu kapatıp kilitliyor; değiştirilmiş
+   * bir istemci bunu görmezden gelebilir. Gerçek sunucu-taraflı zorlama
+   * ancak bir SFU (LiveKit vb.) ile mümkün olur — README'de zaten
+   * "büyük odalarda SFU'ya yükseltilebilir" notu var.
+   */
+  app.put('/guilds/:guildId/members/:memberId/voice-mute', async (request, reply) => {
+    const me = userId(request);
+    const guildId = snowflakeParam(request.params, 'guildId');
+    const memberId = snowflakeParam(request.params, 'memberId');
+
+    const access = await requireGuildAccess(guildId, me);
+    assertPermission(access.permissions, Permission.MUTE_MEMBERS);
+    await assertCanManageMember(access.guild, access.member, memberId);
+
+    const body = z.object({ muted: z.boolean() }).parse(request.body);
+
+    await writeAuditLog({
+      guildId,
+      actorId: me,
+      actionType: body.muted ? 'member_voice_mute' : 'member_voice_unmute',
+      targetId: memberId,
+    });
+
+    // Sunucuya (guild'e) yayınlanır: hedefin istemcisi kendini susturup
+    // kilitler, diğer katılımcıların istemcisi rozeti günceller — ikisi de
+    // aynı olayı dinliyor (bkz. useGateway.ts VOICE_FORCE_MUTE).
+    await publishToGuild({
+      guildId: guildId.toString(),
+      event: GatewayEvent.VOICE_FORCE_MUTE,
+      payload: { guildId: guildId.toString(), userId: memberId.toString(), muted: body.muted },
+    });
+
+    return reply.status(204).send();
+  });
+
+  /* ---------------- Sesli kanaldan taşı (force move) ---------------- */
+
+  /**
+   * Bir kullanıcıyı bulunduğu ses kanalından ALIP başka bir ses kanalına
+   * taşır — hedef kanalda CONNECT izni olmasa DAHİ. Amaç: örn. kanalları
+   * göremeyen bir misafiri, yetkisi olan biri kullanılmakta olan başka bir
+   * kanala çekebilsin; ya da sıradan bir üye özel bir toplantı odasına
+   * çekebilsin. Bu yüzden hedef kanal için ayrıca bir görünürlük/CONNECT
+   * kontrolü YAPILMAZ — yalnızca MOVE_MEMBERS izni yeterli.
+   *
+   * BİLEREK hiyerarşi kontrolü (assertCanManageMember) YOK: kick/ban gibi
+   * yıkıcı değil, geri alınabilir bir eylem, ve kullanıcının tasarladığı
+   * senaryoların çoğu AYNI konumdaki iki üye arasında (ör. sıradan bir
+   * üyenin MOVE_MEMBERS izniyle başka bir sıradan üyeyi özel bir odaya
+   * çekmesi) — hiyerarşi eşitliği engellediği için bu, yalnızca sunucu
+   * sahibinin işe yaradığı bir duruma yol açıyordu.
+   *
+   * Aynı mesh-P2P sınırı burada da geçerli (bkz. voice-mute yorumu): bu bir
+   * istektir, hedefin istemcisi işler. Gerçek taşıma gateway tarafında olur
+   * (bkz. gateway/index.ts forceMoveVoice) — REST katmanı yalnızca izin/
+   * doğrulama yapıp olayı hedef kullanıcıya yayınlar.
+   */
+  app.put('/guilds/:guildId/members/:memberId/voice-move', async (request, reply) => {
+    const me = userId(request);
+    const guildId = snowflakeParam(request.params, 'guildId');
+    const memberId = snowflakeParam(request.params, 'memberId');
+
+    const access = await requireGuildAccess(guildId, me);
+    assertPermission(access.permissions, Permission.MOVE_MEMBERS);
+
+    const body = z.object({ channelId: z.string() }).parse(request.body);
+    const targetChannelId = BigInt(body.channelId);
+
+    const channel = await db.query.channels.findFirst({ where: eq(channels.id, targetChannelId) });
+    if (!channel || channel.guildId !== guildId || channel.type !== ChannelType.GUILD_VOICE) {
+      throw Errors.notFound('unknown_channel', 'Sesli kanal bulunamadı');
+    }
+
+    await writeAuditLog({
+      guildId,
+      actorId: me,
+      actionType: 'member_voice_move',
+      targetId: memberId,
+    });
+
+    // Sunucu genelinde değil, YALNIZCA hedef kullanıcıya — bkz. useGateway.ts
+    // VOICE_FORCE_MOVE ve gateway/index.ts forceMoveVoice (izin kontrolünü
+    // bilerek atlayan taraf orası).
+    await publishToUsers([memberId.toString()], {
+      guildId: guildId.toString(),
+      event: GatewayEvent.VOICE_FORCE_MOVE,
+      payload: {
+        guildId: guildId.toString(),
+        userId: memberId.toString(),
+        channelId: targetChannelId.toString(),
+        // Hedefte VIEW_CHANNEL olmayabilir (bkz. üstteki yorum) — kanal adı
+        // istemciye başka hiçbir yoldan ulaşmaz, burada taşınıyor.
+        channelName: channel.name ?? '',
+      },
+    });
+
     return reply.status(204).send();
   });
 

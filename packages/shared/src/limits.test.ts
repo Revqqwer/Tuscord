@@ -13,7 +13,13 @@ describe('channelNameError', () => {
     expect(channelNameError('sesli-sohbet')).toBeNull();
     expect(channelNameError('kanal_1')).toBeNull();
     expect(channelNameError('çğıöşü')).toBeNull();
-    expect(channelNameError('Genel Sohbet')).toBeNull(); // boşluk tireye döner
+  });
+
+  it('boşluk ve büyük harf içeren adları kabul eder — artık slug\'a çevrilmez', () => {
+    expect(channelNameError('Genel Sohbet')).toBeNull();
+    expect(channelNameError('Oyun Odası 42')).toBeNull();
+    expect(normalizeChannelName('Genel Sohbet')).toBe('Genel Sohbet');
+    expect(normalizeChannelName('  Genel   Sohbet  ')).toBe('Genel Sohbet'); // iç boşluklar teke iner
   });
 
   it('üç karakterden kısa adları reddeder', () => {
@@ -23,16 +29,11 @@ describe('channelNameError', () => {
 
   });
 
-  it('yalnızca geçersiz karakterden oluşan adları reddeder', () => {
-    // Bunlar ham hâlde uzunluk kontrolünü geçer ama normalize edilince
-    // boşalır — eskiden adı boş kanal oluşturulabiliyordu.
+  it('sembolü SESSİZCE SİLMEZ, reddeder', () => {
+    // `genel!` sessizce `genel` olsaydı kullanıcı yazdığı karakterin yok
+    // sayıldığını fark etmezdi — bunun yerine reddedilir.
     expect(channelNameError('@!\\')).toBe('invalid_chars');
     expect(channelNameError('!!!!!')).toBe('invalid_chars');
-    expect(normalizeChannelName('@!\\')).toBe('');
-  });
-
-  it('sembolü SESSİZCE SİLMEZ, uyarır', () => {
-    // `genel!` normalize edilince `genel` olur ve geçerli görünürdü.
     expect(channelNameError('genel!')).toBe('invalid_chars');
     expect(channelNameError('a@!')).toBe('invalid_chars');
     expect(channelNameError('kanal#1')).toBe('invalid_chars');

@@ -11,10 +11,11 @@ import {
   Limits,
   Permission,
   channelNameError,
+  isValidChannelSticker,
   normalizeChannelName,
 } from '@tuscord/shared';
 import { db } from '../db/index.js';
-import { channels, permissionOverwrites } from '../db/schema.js';
+import { channels, guildMembers, memberRoles, permissionOverwrites } from '../db/schema.js';
 import { Errors } from '../lib/errors.js';
 import { nextId } from '../lib/id.js';
 import { userId } from '../app.js';
@@ -28,6 +29,33 @@ import { publishToGuild } from '../services/events.js';
 import { toAPIChannel } from '../services/serialize.js';
 import { writeAuditLog } from '../services/audit.js';
 import { snowflakeParam } from '../lib/validate.js';
+import { refreshChannelVisibility } from '../services/channelVisibility.js';
+
+/**
+ * Bir overwrite hedefinin ('role' | 'member') etkilediği üyeler — overwrite
+ * değiştiğinde kanal görünürlüğü etkilenmiş olabilecek kişiler (bkz.
+ * refreshChannelVisibility yorumu). Rol @everyone ise (targetId === guildId)
+ * tüm sunucu üyeleri etkilenir.
+ */
+async function membersAffectedByOverwrite(
+  guildId: bigint,
+  targetType: 'role' | 'member',
+  targetId: bigint,
+): Promise<bigint[]> {
+  if (targetType === 'member') return [targetId];
+  if (targetId === guildId) {
+    const rows = await db
+      .select({ userId: guildMembers.userId })
+      .from(guildMembers)
+      .where(eq(guildMembers.guildId, guildId));
+    return rows.map((r) => r.userId);
+  }
+  const rows = await db
+    .select({ userId: memberRoles.userId })
+    .from(memberRoles)
+    .where(and(eq(memberRoles.guildId, guildId), eq(memberRoles.roleId, targetId)));
+  return rows.map((r) => r.userId);
+}
 
 /**
  * Ad doğrulaması zod'da DEĞİL, normalize edilmiş değer üzerinde yapılır
@@ -54,6 +82,8 @@ const updateChannelBody = z.object({
   nsfw: z.boolean().optional(),
   slowmodeSeconds: z.number().int().min(0).max(Limits.SLOWMODE_MAX_SECONDS).optional(),
   locked: z.boolean().optional(),
+  /** Yalnızca sesli kanal; null = kanal id'sinden türetilen varsayılana dön. */
+  sticker: z.string().nullable().optional(),
 });
 
 const overwriteBody = z.object({
@@ -77,7 +107,7 @@ function requireChannelName(raw: string): string {
   if (error === 'invalid_chars') {
     throw Errors.badRequest(
       'channel_name_invalid_chars',
-      'Kanal adı yalnızca harf, rakam, tire ve alt çizgi içerebilir',
+      'Kanal adı yalnızca harf, rakam, boşluk, tire ve alt çizgi içerebilir',
     );
   }
   if (error === 'too_long') {
@@ -196,9 +226,14 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
       body.topic !== undefined ||
       body.nsfw !== undefined ||
       body.slowmodeSeconds !== undefined ||
-      body.locked !== undefined;
+      body.locked !== undefined ||
+      body.sticker !== undefined;
     if (changesOrder) assertPermission(access.permissions, Permission.REORDER_CHANNELS);
     if (changesGeneral) assertPermission(access.permissions, Permission.MANAGE_CHANNELS);
+
+    if (body.sticker !== undefined && body.sticker !== null && !isValidChannelSticker(body.sticker)) {
+      throw Errors.badRequest('invalid_sticker', 'Geçersiz sticker');
+    }
 
     const patch: Record<string, unknown> = {};
     if (body.name !== undefined) patch.name = requireChannelName(body.name);
@@ -207,6 +242,7 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
     if (body.nsfw !== undefined) patch.nsfw = body.nsfw;
     if (body.slowmodeSeconds !== undefined) patch.slowmodeSeconds = body.slowmodeSeconds;
     if (body.locked !== undefined) patch.locked = body.locked;
+    if (body.sticker !== undefined) patch.sticker = body.sticker;
     if (body.parentId !== undefined) patch.parentId = body.parentId ? BigInt(body.parentId) : null;
 
     if (Object.keys(patch).length === 0) return reply.send(toAPIChannel(access.channel));
@@ -328,6 +364,14 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
       }),
       channelId: channelId.toString(),
     });
+
+    // Görünürlüğü etkilenmiş olabilecek üyelere tam READY yenilemesi — bkz.
+    // membersAffectedByOverwrite/refreshChannelVisibility yorumu. CHANNEL_UPDATE
+    // yalnızca ZATEN görebilenlere gider; bu, YENİ görünür/görünmez olanları kapsar.
+    await refreshChannelVisibility(
+      access.channel.guildId!,
+      await membersAffectedByOverwrite(access.channel.guildId!, body.targetType, targetId),
+    );
     return reply.status(204).send();
   });
 
@@ -337,6 +381,15 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
     const targetId = snowflakeParam(request.params, 'targetId');
     const access = await requireChannelAccess(channelId, me);
     assertPermission(access.permissions, Permission.MANAGE_ROLES);
+
+    // Görünürlük yenilemesi için silmeden ÖNCE tipini öğren — istek gövdesi
+    // targetType taşımıyor (yalnızca targetId).
+    const existing = await db.query.permissionOverwrites.findFirst({
+      where: and(
+        eq(permissionOverwrites.channelId, channelId),
+        eq(permissionOverwrites.targetId, targetId),
+      ),
+    });
 
     await db
       .delete(permissionOverwrites)
@@ -363,6 +416,17 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
       }),
       channelId: channelId.toString(),
     });
+
+    if (existing) {
+      await refreshChannelVisibility(
+        access.channel.guildId!,
+        await membersAffectedByOverwrite(
+          access.channel.guildId!,
+          existing.targetType as 'role' | 'member',
+          targetId,
+        ),
+      );
+    }
     return reply.status(204).send();
   });
 }

@@ -18,6 +18,8 @@ interface Props {
   canManageMessages: boolean;
   userNames: Map<string, string>;
   roleNames: Map<string, string>;
+  /** userId → en yüksek konumlu RENKLİ rolünün rengi (yoksa haritada kayıt yok). */
+  userColors: Map<string, number>;
   onDelete: (message: APIMessage) => void;
   onEdit: (message: APIMessage, content: string) => Promise<void>;
   onReply: (message: APIMessage) => void;
@@ -39,6 +41,7 @@ export function MessageList({
   canManageMessages,
   userNames,
   roleNames,
+  userColors,
   onDelete,
   onEdit,
   onReply,
@@ -154,6 +157,7 @@ export function MessageList({
                 canEdit={isAuthor}
                 userNames={userNames}
                 roleNames={roleNames}
+                authorColor={userColors.get(message.author.id)}
                 onDelete={() => onDelete(message)}
                 onEdit={(content) => onEdit(message, content)}
                 onReply={() => onReply(message)}

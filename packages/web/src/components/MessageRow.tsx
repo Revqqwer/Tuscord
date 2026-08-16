@@ -10,8 +10,10 @@ import { useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flag, Paperclip, Pencil, Reply, SmilePlus, Trash2 } from 'lucide-react';
 import type { APIMessage } from '@tuscord/shared';
+import { useStore } from '../store';
 import { MessageContent } from './MessageContent';
 import { Avatar } from './Avatar';
+import { ImageLightbox } from './ImageLightbox';
 
 /** Hızlı tepki seçenekleri — tam emoji seçici Faz 1.5. */
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '🔥'] as const;
@@ -28,6 +30,8 @@ interface Props {
   canEdit: boolean;
   userNames: Map<string, string>;
   roleNames: Map<string, string>;
+  /** Yazarın en yüksek konumlu RENKLİ rolünün rengi — yoksa varsayılan renk kullanılır. */
+  authorColor?: number;
   onDelete: () => void;
   onEdit: (content: string) => Promise<void>;
   onReply: () => void;
@@ -47,6 +51,7 @@ export function MessageRow({
   canEdit,
   userNames,
   roleNames,
+  authorColor,
   onOpenProfile,
   onDelete,
   onEdit,
@@ -59,9 +64,18 @@ export function MessageRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const isBlocked = useStore((s) => s.blocks.some((b) => b.user.id === message.author.id));
+  const [revealed, setRevealed] = useState(false);
+  const [lightboxAttachment, setLightboxAttachment] = useState<{ url: string; filename: string } | null>(
+    null,
+  );
 
   const author = message.author.displayName ?? message.author.username;
   const time = new Date(message.createdAt);
+  // İsim VE saat, yazarın en yüksek konumlu renkli rolüyle aynı renkte —
+  // rengi yoksa (authorColor undefined) varsayılan Tailwind sınıfları kalır.
+  const roleColorStyle =
+    authorColor !== undefined ? { color: `#${authorColor.toString(16).padStart(6, '0')}` } : undefined;
   const mentionsMe =
     currentUserId !== null &&
     (message.mentions.includes(currentUserId) || message.mentionEveryone);
@@ -88,7 +102,27 @@ export function MessageRow({
     }
   }
 
+  // Engellenen kullanıcının mesajı — içerik daraltılmış, isteyen açabilir.
+  // Tamamen gizlemek yerine bunu tercih ettik: mesaj listesinde açıklanamayan
+  // boşluklar (yanıt zinciri kopması, "kaç mesaj var" tutarsızlığı) yaratmaz.
+  if (isBlocked && !revealed) {
+    return (
+      <div className={`flex items-center gap-2 py-1 text-sm text-[var(--color-ink-faint)] ${grouped ? '' : 'mt-4'}`}>
+        <div className="w-10 shrink-0" />
+        <span className="italic">{t('message.blockedAuthor')}</span>
+        <button
+          type="button"
+          onClick={() => setRevealed(true)}
+          className="text-xs text-[var(--color-ink-muted)] underline hover:text-[var(--color-ink)]"
+        >
+          {t('message.showAnyway')}
+        </button>
+      </div>
+    );
+  }
+
   return (
+    <>
     <div
       className={`group relative flex gap-3 py-0.5 transition-colors duration-500 ${
         highlighted
@@ -100,7 +134,10 @@ export function MessageRow({
     >
       <div className="w-10 shrink-0">
         {grouped ? (
-          <span className="hidden text-[10px] text-[var(--color-ink-faint)] group-hover:block">
+          <span
+            className={`hidden text-[10px] group-hover:block ${roleColorStyle ? '' : 'text-[var(--color-ink-faint)]'}`}
+            style={roleColorStyle}
+          >
             {time.toLocaleTimeString('tr', { hour: '2-digit', minute: '2-digit' })}
           </span>
         ) : (
@@ -131,11 +168,15 @@ export function MessageRow({
             <button
               type="button"
               onClick={onOpenProfile}
-              className="font-medium text-[var(--color-ink)] hover:underline"
+              className={`font-medium hover:underline ${roleColorStyle ? '' : 'text-[var(--color-ink)]'}`}
+              style={roleColorStyle}
             >
               {author}
             </button>
-            <span className="text-xs text-[var(--color-ink-faint)]">
+            <span
+              className={`text-xs ${roleColorStyle ? '' : 'text-[var(--color-ink-faint)]'}`}
+              style={roleColorStyle}
+            >
               {time.toLocaleString('tr', { dateStyle: 'short', timeStyle: 'short' })}
             </span>
           </div>
@@ -173,11 +214,15 @@ export function MessageRow({
           <div className="mt-1 flex flex-wrap gap-2">
             {message.attachments.map((attachment) =>
               attachment.previewUrl ? (
-                <a
+                // `<a target="_blank">` yerine düğme: eskiden dosya URL'sini
+                // doğrudan açıyordu, tarayıcı bunu çoğu zaman önizleme yerine
+                // ANINDA İNDİRME sayıyordu (bkz. kullanıcı raporu). Artık
+                // tıklama yalnızca tam ekran önizlemeyi açar — indirme orada
+                // ayrı, açık bir düğme (bkz. ImageLightbox.tsx).
+                <button
                   key={attachment.id}
-                  href={attachment.url}
-                  target="_blank"
-                  rel="noreferrer noopener"
+                  type="button"
+                  onClick={() => setLightboxAttachment({ url: attachment.url, filename: attachment.filename })}
                   className="block"
                 >
                   {/*
@@ -191,7 +236,7 @@ export function MessageRow({
                     alt={attachment.filename}
                     className="max-h-80 max-w-full rounded border border-[var(--color-line)] object-contain"
                   />
-                </a>
+                </button>
               ) : (
                 <a
                   key={attachment.id}
@@ -287,6 +332,14 @@ export function MessageRow({
         </div>
       )}
     </div>
+    {lightboxAttachment && (
+      <ImageLightbox
+        url={lightboxAttachment.url}
+        filename={lightboxAttachment.filename}
+        onClose={() => setLightboxAttachment(null)}
+      />
+    )}
+    </>
   );
 }
 

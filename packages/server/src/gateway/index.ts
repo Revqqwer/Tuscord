@@ -30,6 +30,7 @@ import {
   type ResumePayload,
   type VoiceSignalOp,
   type VoiceStateOp,
+  type VoiceStateUpdatePayload,
 } from '@tuscord/shared';
 import { db } from '../db/index.js';
 import { channels, guildMembers, guilds, readStates, users } from '../db/schema.js';
@@ -272,11 +273,11 @@ export class Gateway {
 
     const readyGuilds: ReadyGuild[] = [];
     for (const { guildId } of memberships) {
-      const ready = await buildReadyGuild(guildId, session.user.id);
+      const key = guildId.toString();
+      const ready = await buildReadyGuild(guildId, session.user.id, this.voiceSnapshotForGuild(key));
       if (!ready) continue;
       readyGuilds.push(ready);
 
-      const key = guildId.toString();
       connection.guildIds.add(key);
       const set = this.guildIndex.get(key) ?? new Set();
       set.add(sessionId);
@@ -430,12 +431,89 @@ export class Gateway {
     await this.broadcastVoiceState(state);
   }
 
+  /**
+   * Bir sunucudaki O ANKİ ses kanalı doluluğu — `buildReadyGuild`e verilir,
+   * orada görünürlüğe göre süzülür (bkz. readyGuild.ts yorumu). Bağlanmadan
+   * ÖNCE zaten sesli olan kullanıcılar READY'de görünsün diye (bkz.
+   * ReadyGuild.voiceStates yorumu).
+   */
+  private voiceSnapshotForGuild(guildId: string): VoiceStateUpdatePayload[] {
+    const result: VoiceStateUpdatePayload[] = [];
+    for (const state of this.voiceStates.values()) {
+      if (state.guildId !== guildId) continue;
+      result.push({
+        guildId: state.guildId,
+        channelId: state.channelId,
+        userId: state.user.id,
+        user: state.user,
+        selfMute: state.selfMute,
+        selfDeaf: state.selfDeaf,
+        selfVideo: state.selfVideo,
+      });
+    }
+    return result;
+  }
+
   /** Kullanıcıyı ses kanalından çıkar ve sunucuya ayrıldığını yayınla. */
   private async leaveVoice(userIdValue: string): Promise<void> {
     const state = this.voiceStates.get(userIdValue);
     if (!state) return;
     this.voiceStates.delete(userIdValue);
     await this.broadcastVoiceState(state, true);
+  }
+
+  /**
+   * MOVE_MEMBERS ile zorla taşıma — `handleVoiceState`in tersine BİLEREK
+   * CONNECT izni kontrol ETMEZ (bkz. moderation.ts voice-move yorumu: amaç
+   * kanalı göremeyen bir misafiri bile taşıyabilmek). Yalnızca bu kullanıcı
+   * BU düğüme bağlıysa (voiceStates'te kaydı varsa) çalışır — REST katmanı
+   * olayı yalnızca hedef kullanıcıya yayınladığı için bu, o kullanıcının
+   * bağlı olduğu düğümde tetiklenir (bkz. handlePubSub).
+   */
+  private async forceMoveVoice(userIdValue: string, channelId: string): Promise<void> {
+    const existing = this.voiceStates.get(userIdValue);
+    if (!existing) return; // sesli değilse taşınacak bir şey yok
+    if (existing.channelId === channelId) return; // zaten o kanalda
+
+    // Hedef kanal hâlâ gerçekten sesli mi ve aynı sunucuda mı — REST katmanı
+    // zaten doğruladı, burası taşıma anına kadar silinmiş/taşınmış olma
+    // ihtimaline karşı ikinci bir savunma.
+    const [channel] = await db
+      .select({ guildId: channels.guildId, type: channels.type })
+      .from(channels)
+      .where(eq(channels.id, BigInt(channelId)))
+      .limit(1);
+    if (!channel?.guildId || channel.type !== ChannelType.GUILD_VOICE) return;
+    if (channel.guildId.toString() !== existing.guildId) return;
+
+    await this.leaveVoice(userIdValue);
+
+    const state = {
+      channelId,
+      guildId: existing.guildId,
+      selfMute: existing.selfMute,
+      selfDeaf: existing.selfDeaf,
+      selfVideo: existing.selfVideo,
+      user: existing.user,
+    };
+    this.voiceStates.set(userIdValue, state);
+
+    // Yeni kanaldaki mevcut eşleri taşınan kullanıcıya gönder — teklifi o başlatır.
+    for (const other of this.voiceStates.values()) {
+      if (other.channelId === channelId && other.user.id !== userIdValue) {
+        this.dispatchToUser(userIdValue, GatewayEvent.VOICE_STATE_UPDATE, {
+          guildId: existing.guildId,
+          channelId,
+          userId: other.user.id,
+          user: other.user,
+          selfMute: other.selfMute,
+          selfDeaf: other.selfDeaf,
+          selfVideo: other.selfVideo,
+        });
+      }
+    }
+
+    await this.broadcastVoiceState(state);
   }
 
   /** Ses durumunu kullanıcının sunucusundaki herkese yayınla. */
@@ -525,6 +603,16 @@ export class Gateway {
       await this.syncMembership(envelope);
     }
 
+    // Zorla taşıma: hedef kullanıcının istemcisine olay yukarıda zaten
+    // gönderildi (targets döngüsü) — burada BU düğümdeki authoritative
+    // voiceStates kaydını da güncelleyip diğer katılımcılara yayınlıyoruz.
+    if (envelope.event === GatewayEvent.VOICE_FORCE_MOVE) {
+      const payload = envelope.payload as { userId?: string; channelId?: string } | undefined;
+      if (payload?.userId && payload.channelId) {
+        await this.forceMoveVoice(payload.userId, payload.channelId);
+      }
+    }
+
     // GUILD_CREATE doğrudan kullanıcıya gider (sunucu oluşturma / davetle katılma).
     // Olay zaten iletildi; burada yapılacak iş bağlantıyı yeni sunucunun
     // yayınına abone etmek — yoksa sonraki mesajlar hiç ulaşmaz.
@@ -593,7 +681,11 @@ export class Gateway {
       if (!connection) continue;
       await this.attachToGuild(sessionId, envelope.guildId);
 
-      const ready = await buildReadyGuild(BigInt(envelope.guildId), BigInt(newUserId));
+      const ready = await buildReadyGuild(
+        BigInt(envelope.guildId),
+        BigInt(newUserId),
+        this.voiceSnapshotForGuild(envelope.guildId),
+      );
       if (ready) connection.dispatch(GatewayEvent.GUILD_CREATE, ready);
     }
   }

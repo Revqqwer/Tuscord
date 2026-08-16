@@ -39,6 +39,7 @@ import {
 } from '../services/permissions.js';
 import { publishToGuild, publishToUsers } from '../services/events.js';
 import { buildReadyGuild } from '../services/readyGuild.js';
+import { refreshChannelVisibility } from '../services/channelVisibility.js';
 import { joinGuild } from '../services/joinGuild.js';
 import { detectFileType } from '../services/fileType.js';
 import { generateObjectKey, storage } from '../services/storage.js';
@@ -172,6 +173,9 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
 
     const guildId = nextId();
     const generalId = nextId();
+    const memberRoleId = nextId();
+    const officerRoleId = nextId();
+    const managerRoleId = nextId();
 
     await db.transaction(async (tx) => {
       await tx.insert(guilds).values({
@@ -190,6 +194,46 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
         position: 0,
         permissions: DEFAULT_EVERYONE_PERMISSIONS,
       });
+
+      /**
+       * Varsayılan 3 basamaklı hiyerarşi — kullanıcı doğrudan atayabilsin
+       * diye her yeni sunucuda hazır gelir (elle silinebilir/düzenlenebilir,
+       * sabit değil). Sunucu SAHİBİ zaten computeBasePermissions'ta
+       * ALL_PERMISSIONS alır (bkz. permissions.ts) — o yüzden ayrı bir
+       * "Admin" rolüne gerek yok, "Yönetici" rolü ADMINISTRATOR bitiyle
+       * onun eşdeğeri, ama SAHİP OLMAYAN kullanıcılara da verilebilir.
+       */
+      await tx.insert(roles).values([
+        {
+          id: memberRoleId,
+          guildId,
+          name: 'Üye',
+          position: 1,
+          permissions: DEFAULT_EVERYONE_PERMISSIONS,
+        },
+        {
+          // Üye'nin tüm izinleri + kullanıcılara rol atayıp kaldırabilme
+          // (ASSIGN_ROLES). Rol TANIMLARINI düzenleme (MANAGE_ROLES) BİLEREK
+          // yok — bu daha hassas bir yetki, yalnızca Yönetici'de (ADMINISTRATOR
+          // her şeyi baypas eder) kalsın. Hiyerarşi (position) zaten Subay'ın
+          // Yönetici'yi/sahibi yönetmesini engeller.
+          id: officerRoleId,
+          guildId,
+          name: 'Subay',
+          position: 2,
+          permissions: DEFAULT_EVERYONE_PERMISSIONS | Permission.ASSIGN_ROLES,
+        },
+        {
+          // ADMINISTRATOR = computeBasePermissions'ta ALL_PERMISSIONS'a
+          // baypas eder (bkz. permissions.ts) — sahiple aynı güçte, ama
+          // rol olarak başkasına da verilebilir.
+          id: managerRoleId,
+          guildId,
+          name: 'Yönetici',
+          position: 3,
+          permissions: Permission.ADMINISTRATOR,
+        },
+      ]);
 
       // Kategorisiz, tek bir metin kanalı — sonradan elle oluşturulan
       // kanallardan hiçbir farkı yok (özel bir kategoriye hapsedilmiyor).
@@ -454,7 +498,14 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(result);
   });
 
-  /** Üyeye rol ver / al. Rol hiyerarşisi hem hedefe hem role uygulanır. */
+  /**
+   * Üyeye rol ver. Rol hiyerarşisi (assertCanManageRole) HER ZAMAN
+   * uygulanır — kendine bile olsa kendi konumunun üstündeki/eşiti bir rolü
+   * atayamazsın, yetki yükseltmenin klasik yolu budur. Üye hiyerarşisi
+   * (assertCanManageMember) yalnızca BAŞKASINA rol atarken devreye girer:
+   * kendine rol atamak başka birini "yönetmek" değildir, ASSIGN_ROLES
+   * yeterli olmalı (bkz. kullanıcı raporu — daha önce bunu da engelliyordu).
+   */
   app.put('/guilds/:guildId/members/:memberId/roles/:roleId', async (request, reply) => {
     const me = userId(request);
     const guildId = snowflakeParam(request.params, 'guildId');
@@ -462,12 +513,14 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
     const roleId = snowflakeParam(request.params, 'roleId');
 
     const access = await requireGuildAccess(guildId, me);
-    assertPermission(access.permissions, Permission.MANAGE_ROLES);
+    assertPermission(access.permissions, Permission.ASSIGN_ROLES);
 
     const role = access.guild.roles.get(roleId.toString());
     if (!role) throw Errors.notFound('unknown_role', 'Rol bulunamadı');
-    assertCanManageRole(access.guild, access.member, role);
-    await assertCanManageMember(access.guild, access.member, memberId);
+    assertCanManageRole(access.guild, access.member, role, Permission.ASSIGN_ROLES);
+    if (memberId !== me) {
+      await assertCanManageMember(access.guild, access.member, memberId);
+    }
 
     await db
       .insert(memberRoles)
@@ -483,9 +536,12 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
     });
 
     await emitMemberUpdate(guildId, memberId);
+    // Bu rol VIEW_CHANNEL veriyor olabilir — bkz. refreshChannelVisibility yorumu.
+    await refreshChannelVisibility(guildId, [memberId]);
     return reply.status(204).send();
   });
 
+  /** Üyeden rol al — hiyerarşi kuralı yukarıdaki PUT ile aynı (bkz. yorum). */
   app.delete('/guilds/:guildId/members/:memberId/roles/:roleId', async (request, reply) => {
     const me = userId(request);
     const guildId = snowflakeParam(request.params, 'guildId');
@@ -493,12 +549,14 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
     const roleId = snowflakeParam(request.params, 'roleId');
 
     const access = await requireGuildAccess(guildId, me);
-    assertPermission(access.permissions, Permission.MANAGE_ROLES);
+    assertPermission(access.permissions, Permission.ASSIGN_ROLES);
 
     const role = access.guild.roles.get(roleId.toString());
     if (!role) throw Errors.notFound('unknown_role', 'Rol bulunamadı');
-    assertCanManageRole(access.guild, access.member, role);
-    await assertCanManageMember(access.guild, access.member, memberId);
+    assertCanManageRole(access.guild, access.member, role, Permission.ASSIGN_ROLES);
+    if (memberId !== me) {
+      await assertCanManageMember(access.guild, access.member, memberId);
+    }
 
     await db
       .delete(memberRoles)
@@ -519,6 +577,8 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
     });
 
     await emitMemberUpdate(guildId, memberId);
+    // Bu rol VIEW_CHANNEL veriyordu olabilir — kaybettiyse görünürlük düşsün.
+    await refreshChannelVisibility(guildId, [memberId]);
     return reply.status(204).send();
   });
 
@@ -722,6 +782,24 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
       event: GatewayEvent.GUILD_ROLE_UPDATE,
       payload,
     });
+
+    // İzinler değiştiyse (özellikle VIEW_CHANNEL) bu rolü taşıyan üyelerin
+    // kanal görünürlüğü de değişmiş olabilir — GUILD_ROLE_UPDATE tek başına
+    // bunu yansıtmaz (kanal-özel bir olay değil). Etkilenenlere tam bir
+    // READY yenilemesi gönder, sayfa yenilemeye gerek kalmasın.
+    if (patch.permissions !== undefined) {
+      const affected =
+        roleId === guildId
+          ? (await db.select({ userId: guildMembers.userId }).from(guildMembers).where(eq(guildMembers.guildId, guildId))).map((r) => r.userId)
+          : (
+              await db
+                .select({ userId: memberRoles.userId })
+                .from(memberRoles)
+                .where(and(eq(memberRoles.guildId, guildId), eq(memberRoles.roleId, roleId)))
+            ).map((r) => r.userId);
+      await refreshChannelVisibility(guildId, affected);
+    }
+
     return reply.send(payload);
   });
 
@@ -762,6 +840,11 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
     for (const holder of holders) {
       await emitMemberUpdate(guildId, holder.userId);
     }
+    // Silinen rol VIEW_CHANNEL veriyor olabilirdi — bkz. refreshChannelVisibility yorumu.
+    await refreshChannelVisibility(
+      guildId,
+      holders.map((h) => h.userId),
+    );
     return reply.status(204).send();
   });
 

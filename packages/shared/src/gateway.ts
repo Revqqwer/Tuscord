@@ -106,6 +106,20 @@ export const GatewayEvent = {
   VOICE_STATE_UPDATE: 'VOICE_STATE_UPDATE',
   /** Ses: WebRTC sinyali (SDP/ICE) bir eşten geldi. Yalnızca hedef kullanıcıya. */
   VOICE_SIGNAL: 'VOICE_SIGNAL',
+  /**
+   * Ses: bir moderatör MUTE_MEMBERS izniyle birini susturdu/susturmasını
+   * kaldırdı. Sunucuya (guild'e) yayınlanır — hedef kullanıcının istemcisi
+   * kendi mikrofonunu kapatıp kilitler, diğerlerinin istemcisi rozeti günceller.
+   */
+  VOICE_FORCE_MUTE: 'VOICE_FORCE_MUTE',
+  /**
+   * Ses: bir moderatör MOVE_MEMBERS izniyle birini başka bir ses kanalına
+   * taşıdı. Yalnızca hedef kullanıcıya gider (targetUserIds) — CONNECT izni
+   * olmasa dahi taşınabilir, gateway bu olayı işlerken izin kontrolünü
+   * atlar (bkz. gateway/index.ts forceMoveVoice). İstemci mevcut mesh'i
+   * kapatıp yeni kanalda yeniden kurar (bkz. voice.ts applyServerMove).
+   */
+  VOICE_FORCE_MOVE: 'VOICE_FORCE_MOVE',
 } as const;
 export type GatewayEvent = (typeof GatewayEvent)[keyof typeof GatewayEvent];
 
@@ -169,6 +183,14 @@ export interface ReadyGuild {
   memberCount: number;
   /** Kullanıcının bu sunucudaki temel izinleri (kanal overwrite'ları hariç), string bitfield. */
   permissions: string;
+  /**
+   * O anki ses kanalı doluluk anlık görüntüsü — yalnızca `channels`'ta
+   * (yani VIEW_CHANNEL iznim olan) yer alan kanallar için. Bağlanmadan
+   * ÖNCE gerçekleşmiş katılımları kapsar; bağlandıktan SONRAKİ değişimler
+   * zaten canlı VOICE_STATE_UPDATE yayınlarıyla gelir — bu yalnızca
+   * "bağlanmadan önce kim zaten oradaydı" boşluğunu kapatır.
+   */
+  voiceStates: VoiceStateUpdatePayload[];
 }
 
 export interface InvalidSessionPayload {
@@ -268,6 +290,27 @@ export interface VoiceSignalPayload {
   signal: unknown;
 }
 
+/** Sunucu → istemci: bir moderatör bir kullanıcıyı sesli kanalda susturdu/açtı. */
+export interface VoiceForceMutePayload {
+  guildId: Snowflake;
+  userId: Snowflake;
+  muted: boolean;
+}
+
+/**
+ * Sunucu → istemci: bir moderatör bu kullanıcıyı başka bir ses kanalına
+ * taşıdı. `channelName` özellikle taşınıyor: hedef kanalda VIEW_CHANNEL
+ * iznim olmayabilir (bkz. moderation.ts voice-move — bilerek kontrol
+ * edilmiyor), yani kanal normal listemde hiç görünmez; adını başka
+ * hiçbir yerden öğrenemem (bkz. voice.ts applyServerMove).
+ */
+export interface VoiceForceMovePayload {
+  guildId: Snowflake;
+  userId: Snowflake;
+  channelId: Snowflake;
+  channelName: string;
+}
+
 export interface GuildDeletePayload {
   id: Snowflake;
   /** true ise kullanıcı çıkarıldı/ayrıldı; false ise sunucu silindi. */
@@ -307,6 +350,8 @@ export interface GatewayEventPayloadMap {
 
   [GatewayEvent.VOICE_STATE_UPDATE]: VoiceStateUpdatePayload;
   [GatewayEvent.VOICE_SIGNAL]: VoiceSignalPayload;
+  [GatewayEvent.VOICE_FORCE_MUTE]: VoiceForceMutePayload;
+  [GatewayEvent.VOICE_FORCE_MOVE]: VoiceForceMovePayload;
 }
 
 export const GATEWAY_VERSION = 1;

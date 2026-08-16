@@ -85,6 +85,8 @@ export interface APIChannel {
   /** Moderatör kanalı kilitledi: MANAGE_CHANNELS olmadan yazılamaz. */
   locked: boolean;
   lastMessageId: Snowflake | null;
+  /** Yalnızca sesli kanal — elle seçilmiş sticker; null ise kanal id'sinden türetilen varsayılan kullanılır. */
+  sticker: string | null;
   /** Yalnızca MANAGE_CHANNELS iznine sahip istemcilere gönderilir. */
   overwrites?: APIPermissionOverwrite[];
   /** DM ve grup DM için. */
@@ -232,6 +234,12 @@ export interface APIFriendship {
   status: FriendStatus;
   /** pending ise: 'incoming' = bana istek geldi, 'outgoing' = ben gönderdim. */
   direction: 'incoming' | 'outgoing';
+  createdAt: string;
+}
+
+/** Engellediğim bir kullanıcı — yalnızca tek yönlü, ben → onlar. */
+export interface APIBlock {
+  user: PublicUser;
   createdAt: string;
 }
 

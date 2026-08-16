@@ -14,7 +14,7 @@ import { and, eq, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { GatewayEvent, type APIFriendship } from '@tuscord/shared';
 import { db } from '../db/index.js';
-import { friendships, users } from '../db/schema.js';
+import { blocks, friendships, users } from '../db/schema.js';
 import { Errors } from '../lib/errors.js';
 import { userId } from '../app.js';
 import { publishToUsers } from '../services/events.js';
@@ -82,6 +82,17 @@ export async function friendRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!target || target.deletedAt) throw Errors.notFound('unknown_user', 'Bu etiketle kullanıcı bulunamadı');
     if (target.id === me) throw Errors.badRequest('self_friend', 'Kendini ekleyemezsin');
+
+    // Engelleme her iki yönde de isteği durdurur — "bulunamadı" ile aynı
+    // cevap: engellenmiş olduğunu ele vermek (farklı bir hata koduyla)
+    // bilgi sızdırır.
+    const blocked = await db.query.blocks.findFirst({
+      where: or(
+        and(eq(blocks.blockerId, me), eq(blocks.blockedId, target.id)),
+        and(eq(blocks.blockerId, target.id), eq(blocks.blockedId, me)),
+      ),
+    });
+    if (blocked) throw Errors.notFound('unknown_user', 'Bu etiketle kullanıcı bulunamadı');
 
     // Zaten bir ilişki var mı (her iki yönde)?
     const existing = await db.query.friendships.findFirst({

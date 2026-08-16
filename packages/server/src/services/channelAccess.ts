@@ -94,6 +94,7 @@ export function assertCanSend(access: MessageChannelAccess): void {
   }
   if (
     access.channel.type !== ChannelType.GUILD_TEXT &&
+    access.channel.type !== ChannelType.GUILD_VOICE &&
     access.channel.type !== ChannelType.DM &&
     access.channel.type !== ChannelType.GROUP_DM
   ) {

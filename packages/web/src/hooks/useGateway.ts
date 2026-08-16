@@ -13,12 +13,15 @@ import {
   type APIMessage,
   type APIRole,
   type ReadyPayload,
+  type VoiceForceMovePayload,
+  type VoiceForceMutePayload,
   type VoiceSignalPayload,
   type VoiceStateUpdatePayload,
 } from '@tuscord/shared';
 import { gateway } from '../lib/gateway';
 import { voice } from '../lib/voice';
 import { useStore } from '../store';
+import { chimesSuppressed, playVoiceChime } from '../lib/voiceChime';
 
 /**
  * Bahsedildiğinde ve sekme odakta değilken tarayıcı bildirimi göster.
@@ -43,6 +46,28 @@ function maybeNotify(message: APIMessage, myId: string | null): void {
   } catch {
     // Bazı tarayıcılar Notification kurucusunu kısıtlar; sessizce geç.
   }
+}
+
+/**
+ * Kendi ses kanalımdaki BAŞKALARI için katılma/ayrılma sesi.
+ *
+ * Kendi katılma/ayrılma sesim `voice.ts` içinde doğrudan çalınıyor (ağ
+ * round-trip'ine bağlı olmadan, senkron); bu yalnızca "orada bulunanlara
+ * duyuracak" kısmı — biri katılınca/ayrılınca kanaldakiler duysun.
+ *
+ * `applyVoiceState` roster'ı mutasyona uğratmadan ÖNCE çağrılmalı: "önceden
+ * orada mıydı" karşılaştırması eski durumu gerektiriyor.
+ */
+function maybeChimeForPeer(data: VoiceStateUpdatePayload): void {
+  const store = useStore.getState();
+  if (data.user.id === store.user?.id) return; // kendi olayım — zaten çalındı
+  const myChannel = store.voiceChannelId;
+  if (!myChannel || store.selfDeaf || chimesSuppressed()) return;
+
+  const wasHere = store.voiceStates.get(myChannel)?.has(data.user.id) ?? false;
+  const isHereNow = data.channelId === myChannel;
+  if (!wasHere && isHereNow) playVoiceChime('join');
+  else if (wasHere && !isHereNow) playVoiceChime('leave');
 }
 
 export function useGateway(enabled: boolean): void {
@@ -118,6 +143,7 @@ export function useGateway(enabled: boolean): void {
         }
         case GatewayEvent.VOICE_STATE_UPDATE: {
           const data = payload as VoiceStateUpdatePayload;
+          maybeChimeForPeer(data); // roster mutasyona uğramadan ÖNCE — eski durumu kıyaslıyor
           // Roster (tüm sunucudaki ses odaları) + kendi kanalımdaki eş yönetimi.
           state.applyVoiceState(data.channelId, {
             user: data.user,
@@ -130,6 +156,22 @@ export function useGateway(enabled: boolean): void {
         }
         case GatewayEvent.VOICE_SIGNAL: {
           void voice.onSignal(payload as VoiceSignalPayload);
+          break;
+        }
+        case GatewayEvent.VOICE_FORCE_MUTE: {
+          const data = payload as VoiceForceMutePayload;
+          state.setServerMuted(data.userId, data.muted);
+          // Bana aitse mikrofonu gerçekten kapat/kilidi kaldır (bkz. voice.ts).
+          if (data.userId === state.user?.id) voice.applyServerMute(data.muted);
+          break;
+        }
+        case GatewayEvent.VOICE_FORCE_MOVE: {
+          // Bu olay yalnızca hedef kullanıcıya gider (targetUserIds) — her
+          // zaman bana ait, yine de garanti olsun diye kontrol ediyoruz.
+          const data = payload as VoiceForceMovePayload;
+          if (data.userId === state.user?.id) {
+            voice.applyServerMove(data.channelId, data.channelName, data.guildId);
+          }
           break;
         }
         case GatewayEvent.CHANNEL_CREATE:

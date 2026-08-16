@@ -108,41 +108,27 @@ export function isValidUsername(value: string): boolean {
 }
 
 /**
- * Kanal adını slug'a çevirir. Uzunluk KIRPILMAZ — sınırı `channelNameError`
- * uygular. Burada kırpmak 20 karakteri aşan adı sessizce kesiyor ve
- * `too_long` uyarısının hiç görünmemesine yol açıyordu.
+ * Kanal adı: kenar boşlukları kırpılır, iç boşluklar teke indirilir —
+ * `normalizeGuildName` ile aynı kural. Artık slug'a ÇEVRİLMEZ: büyük harf
+ * ve boşluk olduğu gibi korunur (eskiden küçük harfe çevrilip boşluklar
+ * tireyle değiştiriliyordu).
  */
 export function normalizeChannelName(value: string): string {
-  return value
-    .trim()
-    .toLocaleLowerCase('tr')
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9\-_çğıöşü]/g, '');
+  return value.trim().replace(/\s+/g, ' ');
 }
 
 /** Ad doğrulama hatası; istemcide `channel.errors.*` çeviri anahtarı. */
 export type NameError = 'invalid_chars' | 'too_short' | 'too_long' | null;
 
 /**
- * Kanal adı reddedilme sebebi — `null` ise ad geçerli.
- *
- * Sembol kontrolü HAM girdide yapılır, normalize çıktısında değil: `genel!`
- * normalize edilince `genel` olur ve geçerli görünürdü, yani `!` sessizce
- * silinirdi. Kullanıcı yazdığı karakterin yok sayılmasını beklemiyor —
- * uyarmak, sessizce düzeltmekten iyidir.
- *
- * Uzunluk kontrolü ise normalize edilmiş değerde yapılır: `@!\` ham hâlde
- * uzunluk kontrolünü geçer ama geriye boş string kalır.
+ * Kanal adı reddedilme sebebi — `null` ise ad geçerli. `guildNameError` ile
+ * aynı kural: geçersiz karakterler SESSİZCE SİLİNMEZ, reddedilir —
+ * kullanıcı "genel!" yazdığında adın sessizce "genel" olması sürpriz olur.
  */
 export function channelNameError(value: string): NameError {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return 'too_short';
-  if (!NAME_ALLOWED.test(trimmed)) return 'invalid_chars';
-
   const normalized = normalizeChannelName(value);
-  // İzin verilen kümede olup slug'a çevrilemeyen harfler (ör. Kiril) burada
-  // boşaltır — sebep uzunluk değil, karakterlerdir.
-  if (normalized.length === 0) return 'invalid_chars';
+  if (normalized.length === 0) return 'too_short';
+  if (!NAME_ALLOWED.test(normalized)) return 'invalid_chars';
   if (normalized.length < Limits.CHANNEL_NAME_MIN) return 'too_short';
   if (normalized.length > Limits.CHANNEL_NAME_MAX) return 'too_long';
   return null;
@@ -160,12 +146,9 @@ export function normalizeGuildName(value: string): string {
 /**
  * Sunucu adı reddedilme sebebi — `null` ise geçerli.
  *
- * Kanal adıyla AYNI hata türlerini döner ki iki ekran aynı uyarı metinlerini
- * ve aynı akışı paylaşsın. Fark yalnızca izin verilen karakter kümesinde:
- * sunucu adında boşluk ve büyük harf serbest, semboller değil.
- *
- * Kanal adının aksine geçersiz karakterler SESSİZCE SİLİNMEZ, reddedilir —
- * kullanıcı "Sunucu!" yazdığında adın sessizce "Sunucu" olması sürpriz olur.
+ * Kanal adıyla AYNI hata türlerini ve AYNI karakter kuralını (`NAME_ALLOWED`)
+ * kullanır ki iki ekran aynı uyarı metinlerini ve aynı akışı paylaşsın —
+ * bkz. `channelNameError`.
  */
 export function guildNameError(value: string): NameError {
   const normalized = normalizeGuildName(value);
@@ -178,4 +161,38 @@ export function guildNameError(value: string): NameError {
 
 export function isValidGuildName(value: string): boolean {
   return guildNameError(value) === null;
+}
+
+/**
+ * Sesli kanal "sticker"ları — kanal listesindeki hoparlör simgesinin yerini
+ * alan yuvarlak rozet.
+ *
+ * v1 KASITLI OLARAK Unicode emoji: indirme, lisans kontrolü ya da depolama
+ * gerektirmeden anında kullanılabilecek bir "koleksiyon". İleride gerçek bir
+ * illüstratörden özel bir set gelirse tek değişiklik bu listeyi PNG/SVG
+ * URL'lerine çevirmek olur; sunucu tarafı doğrulama ve istemci render mantığı
+ * aynı kalır.
+ *
+ * Sunucu, gelen `sticker` alanını bu listeye karşı doğrular — keyfi metin ya
+ * da URL kabul edilmez (overwrite/isim doğrulaması gibi, güvenlik sınırı
+ * sunucuda).
+ */
+export const CHANNEL_STICKERS = [
+  '🎮', '🎵', '🎨', '🚀', '🔥', '⭐', '🌙', '🎲', '🍕', '🍩',
+  '🐙', '🦄', '🎧', '🌈', '⚡', '🎯', '🏆', '👾', '🎃', '🐸',
+] as const;
+
+export type ChannelSticker = (typeof CHANNEL_STICKERS)[number];
+
+export function isValidChannelSticker(value: string): value is ChannelSticker {
+  return (CHANNEL_STICKERS as readonly string[]).includes(value);
+}
+
+/**
+ * Elle bir sticker seçilmediyse kanal id'sinden türetilen SABİT bir seçim
+ * (gerçek rastgele değil — her render'da değişmesin).
+ */
+export function defaultStickerForChannel(channelId: string): ChannelSticker {
+  const index = Number(BigInt(channelId) % BigInt(CHANNEL_STICKERS.length));
+  return CHANNEL_STICKERS[index]!;
 }
