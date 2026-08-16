@@ -9,6 +9,7 @@ import { inviteRoutes } from './invites.js';
 import { moderationRoutes } from './moderation.js';
 import { attachmentRoutes } from './attachments.js';
 import { friendRoutes } from './friends.js';
+import { blockRoutes } from './blocks.js';
 import { adminRoutes } from './admin.js';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
@@ -37,6 +38,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       await api.register(moderationRoutes);
       await api.register(attachmentRoutes);
       await api.register(friendRoutes);
+      await api.register(blockRoutes);
       await api.register(adminRoutes);
     },
     { prefix: '/api/v1' },

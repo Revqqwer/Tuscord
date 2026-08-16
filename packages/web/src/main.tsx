@@ -1,9 +1,11 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-// Inter değişken fontu — kendi kendine barındırılır (CDN yok), build'e gömülür.
-// Discord'un telifli ggsans'ının açık lisanslı, ruhen yakın karşılığı.
-import '@fontsource-variable/inter';
+// Plus Jakarta Sans değişken fontu — kendi kendine barındırılır (CDN yok,
+// Google Fonts CDN ziyaretçi IP'sini Google'a sızdırır), build'e gömülür.
+// Inter'den değişti: geometrik ama sıcak karakteri, mors maskotuyla daha
+// tutarlı; başlıklarda da metin boyutunda da iyi okunuyor.
+import '@fontsource-variable/plus-jakarta-sans';
 import './i18n';
 import './index.css';
 import { App } from './App';

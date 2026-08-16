@@ -39,10 +39,19 @@ export const Permission = {
   REORDER_CHANNELS: 1n << 25n,
   CREATE_TEXT_CHANNELS: 1n << 26n,
   CREATE_VOICE_CHANNELS: 1n << 27n,
+  /** Rol TANIMLARINI düzenleme (ad/renk/izin bitleri/kanal overwrite'ları, oluşturma, silme). */
   MANAGE_ROLES: 1n << 11n,
   MANAGE_NICKNAMES: 1n << 12n,
   MANAGE_GUILD: 1n << 13n,
   VIEW_AUDIT_LOG: 1n << 14n,
+  /**
+   * Mevcut rolleri üyelere atama/kaldırma — MANAGE_ROLES'ten AYRI: bir
+   * kullanıcı rol dağıtabilsin diye rolün KENDİSİNİ (izinlerini, hangi
+   * kanalları gördüğünü) düzenleyebilmesi gerekmez. Rol düzenleme daha
+   * hassas bir yetki (yetki yükseltmenin klasik yolu) — yalnızca
+   * MANAGE_ROLES'ü taşıyanlarda (tipik olarak Yönetici/ADMINISTRATOR) kalsın.
+   */
+  ASSIGN_ROLES: 1n << 28n,
 
   // Moderasyon
   KICK_MEMBERS: 1n << 15n,
@@ -149,7 +158,7 @@ export const PERMISSION_GROUPS = [
   },
   {
     id: 'management',
-    permissions: ['MANAGE_ROLES', 'MANAGE_GUILD', 'VIEW_AUDIT_LOG'],
+    permissions: ['ASSIGN_ROLES', 'MANAGE_ROLES', 'MANAGE_GUILD', 'VIEW_AUDIT_LOG'],
   },
   {
     id: 'voice',
@@ -375,9 +384,19 @@ export function canManageMember(
 /**
  * `actor`, bu rolü düzenleyebilir/atayabilir/silebilir mi?
  * Kendi en yüksek rolünden düşük konumdaki roller üzerinde yetkilidir.
+ *
+ * `requiredPermission` çağırana göre değişir: rol TANIMINI düzenlerken
+ * MANAGE_ROLES (varsayılan), üyeye rol ATARKEN ASSIGN_ROLES — ikisi ayrı
+ * yetkiler (bkz. permissions.ts ASSIGN_ROLES yorumu), ama pozisyon
+ * hiyerarşisi kuralı (kendinden düşük role) HER İKİSİNDE de aynı.
  */
-export function canManageRole(guild: GuildLike, actor: MemberLike, role: RoleLike): boolean {
+export function canManageRole(
+  guild: GuildLike,
+  actor: MemberLike,
+  role: RoleLike,
+  requiredPermission: PermissionBits = Permission.MANAGE_ROLES,
+): boolean {
   if (actor.userId === guild.ownerId) return true;
-  if (!has(computeBasePermissions(guild, actor), Permission.MANAGE_ROLES)) return false;
+  if (!has(computeBasePermissions(guild, actor), requiredPermission)) return false;
   return highestRolePosition(guild, actor) > role.position;
 }

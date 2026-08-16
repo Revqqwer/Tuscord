@@ -6,9 +6,9 @@
  * arayüzü.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Camera, LogOut, X } from 'lucide-react';
+import { Camera, LogOut, UserX, X } from 'lucide-react';
 import { Limits, type SelfUser } from '@tuscord/shared';
 import { ApiError, api } from '../lib/api';
 import { useStore } from '../store';
@@ -23,7 +23,20 @@ interface Props {
 export function UserSettings({ user, onClose }: Props) {
   const { t, i18n } = useTranslation();
   const setUser = useStore((state) => state.setUser);
+  const blocks = useStore((state) => state.blocks);
+  const removeBlock = useStore((state) => state.removeBlock);
+  const [blockBusyId, setBlockBusyId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  // Bu modal açıkken kanal sürükle-bırak sıralaması kilitlenir — sekme tam
+  // ekran kaplamadığı için native drag altındaki kanal satırlarına sızabiliyordu
+  // (bkz. store'daki channelDragLockCount yorumu). Kapanış ne şekilde olursa
+  // olsun (X, Escape, dışarı tık) unmount her zaman tetiklenir, kilit açılır.
+  useEffect(() => {
+    const { lockChannelDrag, unlockChannelDrag } = useStore.getState();
+    lockChannelDrag();
+    return unlockChannelDrag;
+  }, []);
 
   const [displayName, setDisplayName] = useState(user.displayName ?? '');
   const [bio, setBio] = useState(user.bio ?? '');
@@ -101,6 +114,13 @@ export function UserSettings({ user, onClose }: Props) {
     a.download = 'tuscord-verilerim.json';
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function unblock(userId: string) {
+    setBlockBusyId(userId);
+    await api.delete(`/users/@me/blocks/${userId}`).catch(() => undefined);
+    removeBlock(userId);
+    setBlockBusyId(null);
   }
 
   async function deleteAccount() {
@@ -227,6 +247,42 @@ export function UserSettings({ user, onClose }: Props) {
               ))}
             </div>
           </Field>
+
+          {/* Engellenen kullanıcılar */}
+          <div className="border-t border-[var(--color-line)] pt-4">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              {t('profile.blockedUsers')}
+            </div>
+            {blocks.length === 0 ? (
+              <p className="text-sm text-[var(--color-ink-faint)]">{t('profile.blockedUsersEmpty')}</p>
+            ) : (
+              <div className="space-y-1.5">
+                {blocks.map((block) => (
+                  <div
+                    key={block.user.id}
+                    className="flex items-center gap-2.5 rounded bg-[var(--color-surface-2)] px-2.5 py-1.5"
+                  >
+                    <Avatar
+                      name={block.user.displayName ?? block.user.username}
+                      avatarUrl={block.user.avatarUrl}
+                      size={26}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-sm">
+                      {block.user.displayName ?? block.user.username}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void unblock(block.user.id)}
+                      disabled={blockBusyId === block.user.id}
+                      className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+                    >
+                      <UserX size={12} /> {t('profile.unblock')}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Hesap */}
           <div className="border-t border-[var(--color-line)] pt-4">

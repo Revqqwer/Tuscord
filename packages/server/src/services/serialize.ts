@@ -97,6 +97,7 @@ export function toAPIChannel(channel: Channel, options: ChannelSerializeOptions 
     nsfw: channel.nsfw,
     locked: channel.locked,
     lastMessageId: channel.lastMessageId?.toString() ?? null,
+    sticker: channel.sticker ?? null,
   };
   if (options.includeOverwrites) {
     result.overwrites = options.includeOverwrites.map((o) => ({

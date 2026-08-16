@@ -22,6 +22,7 @@ import {
   Users,
 } from 'lucide-react';
 import {
+  ALL_PERMISSIONS,
   ChannelType,
   Permission,
   type APIGuildMember,
@@ -48,11 +49,21 @@ import { ChannelSettings } from './ChannelSettings';
 import { SearchModal } from './SearchModal';
 import { AdminPanel } from './AdminPanel';
 import { useContextMenu, type MenuItem } from './ContextMenu';
-import { VoiceChannelItem, VoiceControlBar } from './VoiceChannel';
+import {
+  VOICE_USER_DRAG_TYPE,
+  VoiceChannelItem,
+  VoiceControlBar,
+  type VoiceMenuState,
+} from './VoiceChannel';
 import { VoiceStage } from './VoiceStage';
+import { VoiceChannelChatPanel } from './VoiceChannelChatPanel';
 import { ChannelCreateModal } from './ChannelCreateModal';
 import { InviteLinkModal } from './InviteLinkModal';
-import type { APIChannel, APIFriendship } from '@tuscord/shared';
+import type { APIBlock, APIChannel, APIFriendship } from '@tuscord/shared';
+
+// Sabit referans: aşağıdaki `?? EMPTY_MEMBERS` her render'da yeni bir dizi
+// oluşturmasın diye (bkz. VoiceChannelChatPanel.tsx'teki aynı yorum).
+const EMPTY_MEMBERS: APIGuildMember[] = [];
 
 export function ChatShell() {
   const { t } = useTranslation();
@@ -116,6 +127,33 @@ export function ChatShell() {
    * render sırasında mağazadan tamamlanır.
    */
   const [profileUser, setProfileUser] = useState<PublicUser | null>(null);
+  /**
+   * Profil kartından rol atayabilmek için gereken izin/hiyerarşi bağlamı —
+   * RoleSettings.tsx'teki ownPermissions/ownHighestPosition ile AYNI desen
+   * (bkz. o dosyadaki yorum). DM'de guildState yok, o yüzden hepsi false/0.
+   */
+  const profileIsOwner = Boolean(guildState && user?.id === guildState.guild.ownerId);
+  const profileOwnPermissions = guildState
+    ? profileIsOwner
+      ? ALL_PERMISSIONS
+      : BigInt(guildState.permissions)
+    : 0n;
+  const profileCanAssignRoles = can(profileOwnPermissions, Permission.ASSIGN_ROLES);
+  const profileOwnHighestPosition = guildState
+    ? profileIsOwner
+      ? Number.POSITIVE_INFINITY
+      : guildState.member.roles
+          .map((roleId) => guildState.roles.find((r) => r.id === roleId)?.position ?? 0)
+          .reduce((max, p) => Math.max(max, p), 0)
+    : 0;
+  /**
+   * Ekran paylaşımı tam ekran modu: kim odaklandıysa o kullanıcının id'si.
+   * null iken normal görünüm (VoiceStage şerit + sohbet birlikte). Dolu iken
+   * sohbet TAMAMEN gizlenir, VoiceStage tam alanı kaplar (bkz. VoiceStage.tsx
+   * yorumu — eskiden ikisi hep birlikte gösteriliyordu, kullanıcı bunu
+   * "bölünmüş" bulup değiştirilmesini istedi).
+   */
+  const [focusedPresenterId, setFocusedPresenterId] = useState<string | null>(null);
 
   // Bana gelen bekleyen arkadaşlık istekleri (alt çubuktaki rozet).
   const pendingRequests = store.friends.filter(
@@ -153,6 +191,21 @@ export function ChatShell() {
     [guildState],
   );
 
+  // Mesaj satırlarında isim/saat rengi: üyenin en yüksek konumlu RENKLİ
+  // rolü (Discord kuralı — @everyone'un rengi yoktur, sıradaki adaya geçilir).
+  // Renk yoksa haritada hiç kayıt yok — MessageRow varsayılan rengi kullanır.
+  const userColors = useMemo(() => {
+    const map = new Map<string, number>();
+    const roles = guildState?.roles ?? [];
+    for (const member of members) {
+      const colored = roles
+        .filter((r) => r.id !== activeGuildId && r.color !== 0 && member.roles.includes(r.id))
+        .sort((a, b) => b.position - a.position)[0];
+      if (colored) map.set(member.user.id, colored.color);
+    }
+    return map;
+  }, [members, guildState, activeGuildId]);
+
   // @ ile etiketlenebilecek kişiler — sunucu kanalında üyeler, DM'de yok.
   const mentionables = useMemo(
     () =>
@@ -167,6 +220,52 @@ export function ChatShell() {
     [members, dmChannel],
   );
 
+  /**
+   * Bağlı olduğum ses kanalının kendi sohbet paneli için bağlam — bu kanal
+   * ŞU AN görüntülenen sunucuda olmayabilir (bkz. VoiceControlBar'daki aynı
+   * arama deseni), o yüzden `guilds` haritasının tamamında aranıyor.
+   */
+  const voiceChannelId = store.voiceChannelId;
+  let voiceChatGuildState: GuildState | undefined;
+  let voiceChatChannel: APIChannel | undefined;
+  for (const g of guilds.values()) {
+    const ch = g.channels.find((c) => c.id === voiceChannelId);
+    if (ch) {
+      voiceChatGuildState = g;
+      voiceChatChannel = ch;
+      break;
+    }
+  }
+  const voiceChatMembers = voiceChatGuildState
+    ? (store.members.get(voiceChatGuildState.guild.id) ?? EMPTY_MEMBERS)
+    : EMPTY_MEMBERS;
+  const voiceChatUserNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const member of voiceChatMembers) {
+      map.set(member.user.id, member.nickname ?? member.user.displayName ?? member.user.username);
+    }
+    return map;
+  }, [voiceChatMembers]);
+  const voiceChatRoleNames = useMemo(
+    () => new Map((voiceChatGuildState?.roles ?? []).map((role) => [role.id, role.name])),
+    [voiceChatGuildState],
+  );
+  const voiceChatUserColors = useMemo(() => {
+    const map = new Map<string, number>();
+    const roles = voiceChatGuildState?.roles ?? [];
+    for (const member of voiceChatMembers) {
+      const colored = roles
+        .filter((r) => r.id !== voiceChatGuildState?.guild.id && r.color !== 0 && member.roles.includes(r.id))
+        .sort((a, b) => b.position - a.position)[0];
+      if (colored) map.set(member.user.id, colored.color);
+    }
+    return map;
+  }, [voiceChatMembers, voiceChatGuildState]);
+  const voiceChatPermissions =
+    voiceChatGuildState && voiceChatChannel
+      ? channelPermissions(voiceChatGuildState, voiceChatChannel)
+      : 0n;
+
   // Kanal değişince yanıt hedefi düşer — başka kanalda yanıtlamak anlamsız.
   useEffect(() => setReplyTo(null), [activeChannelId]);
 
@@ -175,6 +274,11 @@ export function ChatShell() {
     void api
       .get<APIFriendship[]>('/users/@me/friends')
       .then((list) => store.setFriends(list))
+      .catch(() => undefined);
+
+    void api
+      .get<APIBlock[]>('/users/@me/blocks')
+      .then((list) => store.setBlocks(list))
       .catch(() => undefined);
 
     // Bahsetme bildirimleri için izin iste (bir kez). Reddedilirse uygulama
@@ -423,9 +527,9 @@ export function ChatShell() {
         </header>
 
         {/* Ekran paylaşımı sahnesi — ses kanalındayken aktif paylaşımlar. */}
-        <VoiceStage />
+        <VoiceStage focusedPresenterId={focusedPresenterId} onFocus={setFocusedPresenterId} />
 
-        {channel ? (
+        {focusedPresenterId ? null : channel ? (
           <>
             <MessageList
               messages={messages}
@@ -433,6 +537,7 @@ export function ChatShell() {
               canManageMessages={canManageMessages}
               userNames={userNames}
               roleNames={roleNames}
+              userColors={userColors}
               onLoadOlder={() => void loadOlder()}
               onDelete={(message) => {
                 if (!confirm(t('message.deleteConfirm'))) return;
@@ -486,6 +591,19 @@ export function ChatShell() {
 
       <MemberList onOpenProfile={(member) => setProfileUser(member.user)} />
 
+      {store.voiceChatOpen && voiceChannelId && voiceChatChannel && (
+        <VoiceChannelChatPanel
+          channelId={voiceChannelId}
+          channelName={voiceChatChannel.name ?? ''}
+          permissions={voiceChatPermissions}
+          userNames={voiceChatUserNames}
+          roleNames={voiceChatRoleNames}
+          userColors={voiceChatUserColors}
+          onOpenProfile={setProfileUser}
+          onClose={() => store.setVoiceChatOpen(false)}
+        />
+      )}
+
       {settingsOpen && user && (
         <UserSettings user={user} onClose={() => setSettingsOpen(false)} />
       )}
@@ -527,6 +645,9 @@ export function ChatShell() {
           roles={guildState?.roles ?? []}
           isSelf={profileUser.id === user?.id}
           status={store.presence.get(profileUser.id) ?? 'offline'}
+          guildId={guildState?.guild.id}
+          canAssignRoles={profileCanAssignRoles}
+          ownHighestPosition={profileOwnHighestPosition}
           onClose={() => setProfileUser(null)}
           onSendMessage={() => {
             const target = profileUser.id;
@@ -731,7 +852,16 @@ function DMList({ onNavigate }: NavProps) {
 
 function ChannelList({ onNavigate }: NavProps) {
   const { t } = useTranslation();
-  const { guilds, activeGuildId, activeChannelId, setActive, readStates } = useStore();
+  const {
+    guilds,
+    activeGuildId,
+    activeChannelId,
+    setActive,
+    readStates,
+    channelDragLockCount,
+    forcedVoiceChannelInfo,
+    voiceChannelId,
+  } = useStore();
   const [moderationOpen, setModerationOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -740,6 +870,22 @@ function ChannelList({ onNavigate }: NavProps) {
   /** Sürüklenen kanalın id'si ve bırakılacak yuva — sürükle-bırak sıralama. */
   const [dragChannelId, setDragChannelId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; edge: 'before' | 'after' } | null>(
+    null,
+  );
+  /**
+   * Bir katılımcıyı sürükleyip üstüne getirdiğimiz sesli kanal — kanal
+   * sıralaması sürüklemesinden (dropTarget) AYRI: MOVE_MEMBERS izniyle bir
+   * kullanıcıyı doğrudan başka bir sesli kanala taşımak için (bkz.
+   * VoiceChannel.tsx VOICE_USER_DRAG_TYPE).
+   */
+  const [userDropTargetId, setUserDropTargetId] = useState<string | null>(null);
+  /**
+   * Ses kanalı/kullanıcı sağ tık menüsü — TÜM sesli kanallar için TEK state
+   * (bkz. VoiceChannel.tsx VoiceMenuState yorumu): aynı anda birden fazla
+   * kanalın/kullanıcının menüsü açık kalmasın diye burada, ChannelList
+   * seviyesinde tutuluyor.
+   */
+  const [voiceMenu, setVoiceMenu] = useState<(VoiceMenuState & { channelId: string }) | null>(
     null,
   );
   const menu = useContextMenu();
@@ -810,10 +956,48 @@ function ChannelList({ onNavigate }: NavProps) {
 
   const guildPerms = BigInt(state.permissions);
   const canManage = can(guildPerms, Permission.MANAGE_CHANNELS);
-  const canReorder = can(guildPerms, Permission.REORDER_CHANNELS);
+  // Bir profil kartı/kullanıcı ayarları modalı açıkken sürüklemeyi kilitle —
+  // bkz. store'daki channelDragLockCount ve UserSettings/ProfilePopout'taki efekt.
+  const canReorder = can(guildPerms, Permission.REORDER_CHANNELS) && channelDragLockCount === 0;
+  const canServerMute = can(guildPerms, Permission.MUTE_MEMBERS);
+  const canMoveMembers = can(guildPerms, Permission.MOVE_MEMBERS);
+  const voiceChannels = state.channels.filter((c) => c.type === ChannelType.GUILD_VOICE);
+  /**
+   * MOVE_MEMBERS ile VIEW_CHANNEL iznim olmayan bir kanala taşındığımda
+   * (bkz. forcedVoiceChannelInfo yorumu) kanal `state.channels`'ta hiç
+   * yok — burada sentetik bir APIChannel kurup SES KANALLARI listesinin
+   * sonuna ekliyoruz ki diğer sesli kanallardan görsel olarak farksız
+   * görünsün (sadece sıralama/kanal-ayarları gibi VIEW_CHANNEL gerektiren
+   * işlemler için gerçek bir kanal kaydı gibi davranmaz).
+   */
+  const forcedChannel: APIChannel | null =
+    forcedVoiceChannelInfo &&
+    forcedVoiceChannelInfo.guildId === state.guild.id &&
+    voiceChannelId &&
+    !state.channels.some((c) => c.id === voiceChannelId)
+      ? {
+          id: voiceChannelId,
+          guildId: state.guild.id,
+          type: ChannelType.GUILD_VOICE,
+          name: forcedVoiceChannelInfo.name,
+          topic: null,
+          position: Number.MAX_SAFE_INTEGER,
+          parentId: null,
+          slowmodeSeconds: 0,
+          nsfw: false,
+          locked: false,
+          lastMessageId: null,
+          sticker: null,
+        }
+      : null;
   const canCreateText = can(guildPerms, Permission.CREATE_TEXT_CHANNELS);
   const canCreateVoice = can(guildPerms, Permission.CREATE_VOICE_CHANNELS);
-  const canManageRoles = can(guildPerms, Permission.MANAGE_ROLES);
+  // Rol atama (ASSIGN_ROLES) yetkisi olan ama rol TANIMLARINI düzenleme
+  // yetkisi (MANAGE_ROLES) olmayan biri de Roller ekranını açabilmeli —
+  // orada yalnızca "Bu roldeki üyeler" bölümünü kullanabilecek (bkz.
+  // RoleSettings.tsx canEditRoleDefs).
+  const canManageRoles =
+    can(guildPerms, Permission.MANAGE_ROLES) || can(guildPerms, Permission.ASSIGN_ROLES);
   const canInvite = can(guildPerms, Permission.CREATE_INVITE);
   // Moderasyon düğmesi: bu izinlerden herhangi biri yeterli.
   const canModerate =
@@ -901,6 +1085,13 @@ function ChannelList({ onNavigate }: NavProps) {
     await moveChannelToIndex(dragged, to);
   }
 
+  /** Bir katılımcıyı sürükle-bırak ile başka bir sesli kanala taşı (bkz. VoiceChannel.tsx sağ tık menüsündeki "Taşı" ile aynı uç). */
+  async function moveMemberToChannel(userId: string, targetChannelId: string) {
+    await api
+      .put(`/guilds/${state!.guild.id}/members/${userId}/voice-move`, { channelId: targetChannelId })
+      .catch(() => undefined); // 403/hiyerarşi hatası — sessizce geç
+  }
+
   // Sağ tık menüsü ya genel ayarlar (canManage) ya da yalnızca sıralama
   // (canReorder) için açılabilir — ikisinden biri yeterli.
   const canOpenChannelMenu = canManage || canReorder;
@@ -909,7 +1100,21 @@ function ChannelList({ onNavigate }: NavProps) {
   function renderChannel(channel: APIChannel) {
     const inner =
       channel.type === ChannelType.GUILD_VOICE ? (
-        <VoiceChannelItem channel={channel} onNavigate={onNavigate} />
+        <VoiceChannelItem
+          channel={channel}
+          canServerMute={canServerMute}
+          canMoveMembers={canMoveMembers}
+          voiceChannels={voiceChannels}
+          menu={voiceMenu && voiceMenu.channelId === channel.id ? voiceMenu : null}
+          onOpenMenu={(state) => setVoiceMenu({ ...state, channelId: channel.id })}
+          onCloseMenu={() => setVoiceMenu(null)}
+          // Ses kanalının sağ tık menüsü TEK sekmede birleşik: ses seviyesi +
+          // (izne göre) kanal ayarları/sıralama — bkz. VoiceChannel.tsx
+          // yorumu. Ayrı bir dış "kanal ayarları" menüsü olmadığı için
+          // burası her zaman `channelMenu(channel)` sonucunu iletir.
+          extraMenuItems={canOpenChannelMenu ? channelMenu(channel) : []}
+          onNavigate={onNavigate}
+        />
       ) : (
         <ChannelButton
           name={channel.name ?? ''}
@@ -932,12 +1137,23 @@ function ChannelList({ onNavigate }: NavProps) {
     const droppable =
       dragged !== null && dragged.id !== channel.id && sameReorderGroup(dragged, channel);
     const indicator = droppable && dropTarget?.id === channel.id ? dropTarget.edge : null;
+    // Sürüklenen bir katılımcı bu (sesli) kanalın üstünde mi — kanal
+    // sıralamasından bağımsız, MOVE_MEMBERS taşıma hedefi.
+    const isUserDropTarget =
+      channel.type === ChannelType.GUILD_VOICE && canMoveMembers && userDropTargetId === channel.id;
 
     return (
       <div
         key={channel.id}
         draggable={canReorder}
-        onContextMenu={canOpenChannelMenu ? (e) => menu.open(e, channelMenu(channel)) : undefined}
+        // Ses kanalları KENDİ birleşik sağ tık menüsünü yönetiyor (bkz.
+        // VoiceChannelItem extraMenuItems) — burada ikinci bir menü açmak
+        // tam da giderdiğimiz "iki farklı menü" karışıklığını geri getirir.
+        onContextMenu={
+          channel.type !== ChannelType.GUILD_VOICE && canOpenChannelMenu
+            ? (e) => menu.open(e, channelMenu(channel))
+            : undefined
+        }
         onDragStart={(e) => {
           setDragChannelId(channel.id);
           e.dataTransfer.effectAllowed = 'move';
@@ -949,6 +1165,16 @@ function ChannelList({ onNavigate }: NavProps) {
           setDropTarget(null);
         }}
         onDragOver={(e) => {
+          // Bir katılımcı sürükleniyorsa (kanal sıralamasından AYRI akış):
+          // yalnızca sesli kanallar hedef olabilir, "before/after" çizgisi yok
+          // — tüm satır vurgulanır (bkz. isUserDropTarget).
+          if (e.dataTransfer.types.includes(VOICE_USER_DRAG_TYPE)) {
+            if (channel.type !== ChannelType.GUILD_VOICE || !canMoveMembers) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (userDropTargetId !== channel.id) setUserDropTargetId(channel.id);
+            return;
+          }
           if (!droppable) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'move';
@@ -960,8 +1186,17 @@ function ChannelList({ onNavigate }: NavProps) {
         }}
         onDragLeave={() => {
           if (dropTarget?.id === channel.id) setDropTarget(null);
+          if (userDropTargetId === channel.id) setUserDropTargetId(null);
         }}
         onDrop={(e) => {
+          if (e.dataTransfer.types.includes(VOICE_USER_DRAG_TYPE)) {
+            e.preventDefault();
+            setUserDropTargetId(null);
+            if (channel.type !== ChannelType.GUILD_VOICE || !canMoveMembers) return;
+            const userId = e.dataTransfer.getData(VOICE_USER_DRAG_TYPE);
+            if (userId) void moveMemberToChannel(userId, channel.id);
+            return;
+          }
           if (!droppable || !indicator) return;
           e.preventDefault();
           void dropChannelOn(channel, indicator);
@@ -970,7 +1205,7 @@ function ChannelList({ onNavigate }: NavProps) {
         }}
         className={`${canReorder ? 'cursor-grab active:cursor-grabbing' : ''} ${
           dragChannelId === channel.id ? 'opacity-40' : ''
-        } ${
+        } ${isUserDropTarget ? 'rounded bg-[var(--color-brand)]/15 ring-1 ring-[var(--color-brand)]' : ''} ${
           indicator === 'before'
             ? 'border-t-2 border-[var(--color-brand)]'
             : indicator === 'after'
@@ -1061,6 +1296,7 @@ function ChannelList({ onNavigate }: NavProps) {
           guildId={activeGuildId}
           canCreateText={canCreateText}
           canCreateVoice={canCreateVoice}
+          roles={state.roles}
           onClose={() => setCreateOpen(false)}
         />
       )}
@@ -1076,25 +1312,43 @@ function ChannelList({ onNavigate }: NavProps) {
       <div className="flex-1 overflow-y-auto p-2">
         {uncategorizedText.length > 0 && (
           <div>
-            <div className="px-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+            <div className="px-2 text-sm font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
               {t('channel.textChannels')}
             </div>
             {uncategorizedText.map(renderChannel)}
           </div>
         )}
 
-        {uncategorizedVoice.length > 0 && (
+        {(uncategorizedVoice.length > 0 || forcedChannel) && (
           <div className={uncategorizedText.length > 0 ? 'mt-3' : ''}>
-            <div className="px-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+            <div className="px-2 text-sm font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
               {t('channel.voiceChannels')}
             </div>
             {uncategorizedVoice.map(renderChannel)}
+            {forcedChannel && (
+              <div className="border-y-2 border-transparent">
+                <VoiceChannelItem
+                  channel={forcedChannel}
+                  canServerMute={canServerMute}
+                  canMoveMembers={canMoveMembers}
+                  voiceChannels={voiceChannels}
+                  menu={voiceMenu && voiceMenu.channelId === forcedChannel.id ? voiceMenu : null}
+                  onOpenMenu={(menuState) => setVoiceMenu({ ...menuState, channelId: forcedChannel.id })}
+                  onCloseMenu={() => setVoiceMenu(null)}
+                  // Bu satır sentetik — VIEW_CHANNEL'im olmayan bir kanal,
+                  // gerçek bir kanal kaydı değil, kanal ayarları/sıralama
+                  // burada anlamsız.
+                  extraMenuItems={[]}
+                  onNavigate={onNavigate}
+                />
+              </div>
+            )}
           </div>
         )}
 
         {categories.map((category) => (
           <div key={category.id} className="mt-3">
-            <div className="px-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+            <div className="px-2 text-sm font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
               {category.name}
             </div>
             {state.channels
@@ -1138,7 +1392,7 @@ function ChannelButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm ${
+      className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-base ${
         active
           ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
           : unread
@@ -1146,7 +1400,7 @@ function ChannelButton({
             : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]'
       }`}
     >
-      {locked ? <Lock size={14} /> : <Hash size={14} />}
+      {locked ? <Lock size={16} /> : <Hash size={16} />}
       <span className="truncate">{name}</span>
 
       {mentionCount > 0 ? (

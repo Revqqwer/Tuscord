@@ -220,6 +220,8 @@ export const channels = pgTable(
     nsfw: boolean('nsfw').notNull().default(false),
     /** Moderasyon: kanal kilidi (SEND_MESSAGES herkese kapalı). */
     locked: boolean('locked').notNull().default(false),
+    /** Yalnızca sesli kanal — elle seçilmiş sticker (emoji). null → id'den türetilen varsayılan. */
+    sticker: varchar('sticker', { length: 16 }),
     lastMessageId: snowflake('last_message_id'),
     /** Grup DM sahibi. */
     ownerId: snowflake('owner_id'),
@@ -374,6 +376,27 @@ export const friendships = pgTable(
     primaryKey({ columns: [t.requesterId, t.addresseeId] }),
     index('friendships_addressee_idx').on(t.addresseeId, t.status),
     index('friendships_requester_idx').on(t.requesterId, t.status),
+  ],
+);
+
+/**
+ * Engellemeler — tek yönlü, arkadaşlıktan bağımsız bir tablo (kabul/red akışı
+ * yok, anında etkili). `blockerId` engelleyen, `blockedId` engellenen.
+ */
+export const blocks = pgTable(
+  'blocks',
+  {
+    blockerId: snowflake('blocker_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    blockedId: snowflake('blocked_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.blockerId, t.blockedId] }),
+    index('blocks_blocker_idx').on(t.blockerId),
   ],
 );
 

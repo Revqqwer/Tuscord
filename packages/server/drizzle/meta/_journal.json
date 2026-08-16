@@ -29,6 +29,20 @@
       "when": 1786831000000,
       "tag": "0003_flat_channel_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786924000000,
+      "tag": "0004_channel_sticker",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787005000000,
+      "tag": "0005_blocks",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@
 import { create } from 'zustand';
 import { ChannelType, computeBasePermissions } from '@tuscord/shared';
 import type {
+  APIBlock,
   APIChannel,
   APIGuild,
   APIGuildMember,
@@ -21,8 +22,17 @@ import type {
   ReadyGuild,
   SelfUser,
   Snowflake,
+  VoiceStateUpdatePayload,
 } from '@tuscord/shared';
 import type { GatewayStatus } from '../lib/gateway';
+import {
+  loadChannelVolumes,
+  loadMutedPeerIds,
+  loadUserVolumes,
+  saveChannelVolumes,
+  saveMutedPeerIds,
+  saveUserVolumes,
+} from '../lib/voicePrefs';
 
 export interface GuildState {
   guild: APIGuild;
@@ -60,6 +70,8 @@ interface AppState {
   dmView: boolean;
   /** Arkadaşlar + bekleyen istekler. */
   friends: APIFriendship[];
+  /** Engellediğim kullanıcılar. */
+  blocks: APIBlock[];
   activeGuildId: Snowflake | null;
   activeChannelId: Snowflake | null;
   /**
@@ -89,6 +101,45 @@ interface AppState {
   screenStreams: Map<Snowflake, MediaStream>;
   /** Kendim ekran paylaşıyor muyum. */
   selfSharing: boolean;
+  /**
+   * Sesli kanala özel sohbet paneli açık mı — Discord'daki gibi, ses
+   * kanalının kendi metin geçmişi (bkz. VoiceChannelChatPanel.tsx). Ses
+   * kanalından ayrılınca resetVoiceSession ile kapanır.
+   */
+  voiceChatOpen: boolean;
+  /**
+   * Bir moderatör MUTE_MEMBERS ile susturduğu kullanıcılar (bkz.
+   * VOICE_FORCE_MUTE). Susturulan kendi mikrofonunu açamaz; başkaları
+   * roster'da kilit rozeti görür. Yalnızca ANLIK — sayfa yenilenince/kanal
+   * değişince kaybolur (bkz. voice.ts yorumu: mesh P2P'de gerçek
+   * sunucu-taraflı zorlama yok, bu iyi niyetli istemciler için bir istek).
+   */
+  serverMutedUserIds: Set<Snowflake>;
+  /**
+   * Kişisel ses karıştırma tercihlerim — YALNIZCA benim ne duyduğumu
+   * etkiler, kimseye yansımaz. localStorage'da kalıcı (bkz. voicePrefs.ts).
+   */
+  channelVolumes: Map<Snowflake, number>; // 0-100, varsayılan 100
+  userVolumes: Map<Snowflake, number>; // 0-100, varsayılan 100
+  /** Sessize aldığım kullanıcılar (kayan çubuğu 0'a çekmeden hızlı geçiş). */
+  mutedPeerIds: Set<Snowflake>;
+  /**
+   * Kaç tane modal/popout kanal sürükle-bırak sıralamasını kilitliyor.
+   * Sayaç (boolean değil): UserSettings ve ProfilePopout aynı anda açılırsa
+   * biri kapanınca diğeri hâlâ kilidi tutmaya devam etmeli. Native HTML5
+   * sürükleme, altındaki `draggable` satırların üstüne bindiği için tam
+   * ekran kaplamayan/geçici modallar açıkken kanal listesi yanlışlıkla
+   * sürüklenebiliyordu — bkz. ChatShell.tsx `canReorder`.
+   */
+  channelDragLockCount: number;
+  /**
+   * MOVE_MEMBERS ile VIEW_CHANNEL iznim olmayan bir kanala taşındığımda
+   * doldurulur (bkz. voice.ts applyServerMove) — kanal normal listemde hiç
+   * görünmeyeceği için adını/sunucusunu başka hiçbir yerden öğrenemem.
+   * VoiceControlBar bunu kanal görünmezken düşer. Görünür bir kanala
+   * geçince/ayrılınca temizlenir.
+   */
+  forcedVoiceChannelInfo: { name: string; guildId: Snowflake } | null;
 
   setUser: (user: SelfUser | null) => void;
   setPendingActiveGuild: (guildId: Snowflake | null) => void;
@@ -107,6 +158,16 @@ interface AppState {
   setFriends: (list: APIFriendship[]) => void;
   upsertFriend: (friend: APIFriendship) => void;
   removeFriend: (userId: Snowflake) => void;
+  setBlocks: (list: APIBlock[]) => void;
+  addBlock: (block: APIBlock) => void;
+  removeBlock: (userId: Snowflake) => void;
+  setServerMuted: (userId: Snowflake, muted: boolean) => void;
+  setChannelVolume: (channelId: Snowflake, percent: number) => void;
+  setUserVolume: (userId: Snowflake, percent: number) => void;
+  setPeerMuted: (userId: Snowflake, muted: boolean) => void;
+  lockChannelDrag: () => void;
+  unlockChannelDrag: () => void;
+  setForcedVoiceChannelInfo: (info: { name: string; guildId: Snowflake } | null) => void;
   upsertGuild: (guild: ReadyGuild) => void;
   removeGuild: (guildId: Snowflake) => void;
   setActive: (guildId: Snowflake | null, channelId: Snowflake | null) => void;
@@ -141,6 +202,7 @@ interface AppState {
   setSelfMute: (value: boolean) => void;
   setSelfDeaf: (value: boolean) => void;
   setSelfSharing: (value: boolean) => void;
+  setVoiceChatOpen: (open: boolean) => void;
   /** Bir kullanıcının ekran akışını ayarla (null → kaldır). */
   setScreenStream: (userId: Snowflake, stream: MediaStream | null) => void;
   /** Ses oturumunu tamamen sıfırla (ayrılırken). */
@@ -156,6 +218,32 @@ function firstTextChannelId(channels: readonly APIChannel[]): Snowflake | null {
   );
 }
 
+/**
+ * READY/GUILD_CREATE'teki ses anlık görüntüsünü `voiceStates` haritasına
+ * ekler — bağlanmadan ÖNCE zaten sesli olan kullanıcılar sunucuya
+ * tıklandığında (bağlanmadan) roster'da görünsün diye (bkz. ReadyGuild
+ * yorumu). Var olan haritayı MUTATE ETMEZ, kopyasını döner.
+ */
+function mergeVoiceSnapshot(
+  voiceStates: Map<Snowflake, Map<Snowflake, VoiceParticipant>>,
+  snapshot: readonly VoiceStateUpdatePayload[],
+): Map<Snowflake, Map<Snowflake, VoiceParticipant>> {
+  if (snapshot.length === 0) return voiceStates;
+  const next = new Map(voiceStates);
+  for (const vs of snapshot) {
+    if (!vs.channelId) continue; // sunucu zaten süzüyor, tip yalnızca genel payload şeklini paylaşıyor
+    const roster = new Map(next.get(vs.channelId) ?? new Map<Snowflake, VoiceParticipant>());
+    roster.set(vs.userId, {
+      user: vs.user,
+      selfMute: vs.selfMute,
+      selfDeaf: vs.selfDeaf,
+      selfVideo: vs.selfVideo,
+    });
+    next.set(vs.channelId, roster);
+  }
+  return next;
+}
+
 export const useStore = create<AppState>((set) => ({
   user: null,
   status: 'connecting',
@@ -168,6 +256,7 @@ export const useStore = create<AppState>((set) => ({
   privateChannels: [],
   dmView: false,
   friends: [],
+  blocks: [],
   activeGuildId: null,
   activeChannelId: null,
   pendingActiveGuildId: null,
@@ -183,6 +272,13 @@ export const useStore = create<AppState>((set) => ({
   selfDeaf: false,
   screenStreams: new Map(),
   selfSharing: false,
+  voiceChatOpen: false,
+  serverMutedUserIds: new Set(),
+  channelVolumes: loadChannelVolumes(),
+  userVolumes: loadUserVolumes(),
+  mutedPeerIds: loadMutedPeerIds(),
+  channelDragLockCount: 0,
+  forcedVoiceChannelInfo: null,
 
   setUser: (user) => set({ user }),
 
@@ -195,6 +291,13 @@ export const useStore = create<AppState>((set) => ({
     localStorage.setItem('tuscord.memberListMode', mode);
     set({ memberListMode: mode });
   },
+
+  lockChannelDrag: () =>
+    set((state) => ({ channelDragLockCount: state.channelDragLockCount + 1 })),
+  unlockChannelDrag: () =>
+    set((state) => ({ channelDragLockCount: Math.max(0, state.channelDragLockCount - 1) })),
+
+  setForcedVoiceChannelInfo: (info) => set({ forcedVoiceChannelInfo: info }),
 
   /**
    * Sunucu zaten geldiyse hemen aç, gelmediyse beklemeye al.
@@ -217,8 +320,9 @@ export const useStore = create<AppState>((set) => ({
   setStatus: (status) => set({ status }),
 
   applyReady: (user, readyGuilds, states, privateChannels) =>
-    set(() => {
+    set((state) => {
       const guilds = new Map<Snowflake, GuildState>();
+      let voiceStates = state.voiceStates;
       for (const entry of readyGuilds) {
         guilds.set(entry.guild.id, {
           guild: entry.guild,
@@ -228,14 +332,15 @@ export const useStore = create<AppState>((set) => ({
           memberCount: entry.memberCount,
           permissions: entry.permissions,
         });
+        voiceStates = mergeVoiceSnapshot(voiceStates, entry.voiceStates ?? []);
       }
       const readStates = new Map(
-        (states ?? []).map((state) => [
-          state.channelId,
-          { lastReadMessageId: state.lastReadMessageId, mentionCount: state.mentionCount },
+        (states ?? []).map((s) => [
+          s.channelId,
+          { lastReadMessageId: s.lastReadMessageId, mentionCount: s.mentionCount },
         ]),
       );
-      return { user, guilds, readStates, privateChannels: privateChannels ?? [] };
+      return { user, guilds, readStates, privateChannels: privateChannels ?? [], voiceStates };
     }),
 
   markRead: (channelId, messageId) =>
@@ -280,6 +385,51 @@ export const useStore = create<AppState>((set) => ({
   removeFriend: (userId) =>
     set((state) => ({ friends: state.friends.filter((f) => f.user.id !== userId) })),
 
+  setBlocks: (list) => set({ blocks: list }),
+
+  addBlock: (block) =>
+    set((state) => ({
+      blocks: state.blocks.some((b) => b.user.id === block.user.id)
+        ? state.blocks
+        : [...state.blocks, block],
+    })),
+
+  removeBlock: (userId) =>
+    set((state) => ({ blocks: state.blocks.filter((b) => b.user.id !== userId) })),
+
+  setServerMuted: (userId, muted) =>
+    set((state) => {
+      const serverMutedUserIds = new Set(state.serverMutedUserIds);
+      if (muted) serverMutedUserIds.add(userId);
+      else serverMutedUserIds.delete(userId);
+      return { serverMutedUserIds };
+    }),
+
+  setChannelVolume: (channelId, percent) =>
+    set((state) => {
+      const channelVolumes = new Map(state.channelVolumes);
+      channelVolumes.set(channelId, percent);
+      saveChannelVolumes(channelVolumes);
+      return { channelVolumes };
+    }),
+
+  setUserVolume: (userId, percent) =>
+    set((state) => {
+      const userVolumes = new Map(state.userVolumes);
+      userVolumes.set(userId, percent);
+      saveUserVolumes(userVolumes);
+      return { userVolumes };
+    }),
+
+  setPeerMuted: (userId, muted) =>
+    set((state) => {
+      const mutedPeerIds = new Set(state.mutedPeerIds);
+      if (muted) mutedPeerIds.add(userId);
+      else mutedPeerIds.delete(userId);
+      saveMutedPeerIds(mutedPeerIds);
+      return { mutedPeerIds };
+    }),
+
   upsertGuild: (entry) =>
     set((state) => {
       const guilds = new Map(state.guilds);
@@ -291,18 +441,20 @@ export const useStore = create<AppState>((set) => ({
         memberCount: entry.memberCount,
         permissions: entry.permissions,
       });
+      const voiceStates = mergeVoiceSnapshot(state.voiceStates, entry.voiceStates ?? []);
 
       // Beklenen sunucu geldi: kendisini ve ilk metin kanalını aç.
       if (state.pendingActiveGuildId === entry.guild.id) {
         return {
           guilds,
+          voiceStates,
           pendingActiveGuildId: null,
           activeGuildId: entry.guild.id,
           activeChannelId: firstTextChannelId(entry.channels),
         };
       }
 
-      return { guilds };
+      return { guilds, voiceStates };
     }),
 
   removeGuild: (guildId) =>
@@ -606,6 +758,7 @@ export const useStore = create<AppState>((set) => ({
   setSelfMute: (value) => set({ selfMute: value }),
   setSelfDeaf: (value) => set({ selfDeaf: value }),
   setSelfSharing: (value) => set({ selfSharing: value }),
+  setVoiceChatOpen: (open) => set({ voiceChatOpen: open }),
 
   setScreenStream: (userId, stream) =>
     set((state) => {
@@ -622,8 +775,15 @@ export const useStore = create<AppState>((set) => ({
       selfMute: false,
       selfDeaf: false,
       selfSharing: false,
+      voiceChatOpen: false,
       voiceSpeaking: new Set(),
       screenStreams: new Map(),
+      // Sunucu-taraflı susturma kanal oturumuna bağlı — ayrılınca sıfırlanır
+      // (bkz. AppState.serverMutedUserIds yorumu). Kişisel ses tercihleri
+      // (channelVolumes/userVolumes/mutedPeerIds) BURADA sıfırlanmaz —
+      // localStorage'da kalıcı, oturumlar arası korunmalı.
+      serverMutedUserIds: new Set(),
+      forcedVoiceChannelInfo: null,
     }),
 }));
 

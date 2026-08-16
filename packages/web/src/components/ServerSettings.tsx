@@ -46,7 +46,7 @@ export function ServerSettings({ guildState, onClose }: Props) {
     const updated = (await res.json()) as APIGuild;
     if (kind === 'icon') setIconUrl(updated.iconUrl);
     else setBannerUrl(updated.bannerUrl);
-    upsertGuild({ ...guildState, guild: updated });
+    upsertGuild({ ...guildState, guild: updated, voiceStates: [] });
   }
 
   // Sembolde anında, kısalıkta kaydetmeye basınca uyar (bkz. GuildModal).
@@ -64,7 +64,7 @@ export function ServerSettings({ guildState, onClose }: Props) {
         name,
         description: description || null,
       });
-      upsertGuild({ ...guildState, guild: updated });
+      upsertGuild({ ...guildState, guild: updated, voiceStates: [] });
     } catch {
       setError(t('guildModal.errors.guild_name_taken'));
     } finally {

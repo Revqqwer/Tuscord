@@ -9,14 +9,16 @@
 interface Props {
   /** Yükleme metni. */
   label?: string;
+  /** Kenar uzunluğu (px). Varsayılan 96 — açılış sayfası gibi dar yerlerde küçültmek için. */
+  size?: number;
 }
 
-export function WalrusLoader({ label }: Props) {
+export function WalrusLoader({ label, size = 96 }: Props) {
   return (
     <div className="flex flex-col items-center gap-4">
       <svg
-        width="96"
-        height="96"
+        width={size}
+        height={size}
         viewBox="0 0 512 512"
         role="img"
         aria-label="Tuscord"

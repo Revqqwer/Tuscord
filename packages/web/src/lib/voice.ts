@@ -17,6 +17,7 @@
 import { GatewayOp, type VoiceSignalPayload, type VoiceStateUpdatePayload } from '@tuscord/shared';
 import { gateway } from './gateway';
 import { useStore } from '../store';
+import { playVoiceChime, suppressChimesForCatchUp } from './voiceChime';
 
 const ICE_CONFIG: RTCConfiguration = {
   iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }],
@@ -50,6 +51,8 @@ class VoiceManager {
   private audioContext: AudioContext | null = null;
   private localAnalyser: AnalyserNode | null = null;
   private speakingRaf: number | null = null;
+  /** Bir moderatör susturdu — kilit açılana kadar kendi mikrofonumu açamam. */
+  private serverMuteLocked = false;
   deviceIds: { mic?: string; speaker?: string } = {};
 
   get currentChannel(): string | null {
@@ -64,7 +67,9 @@ class VoiceManager {
 
   async join(channelId: string): Promise<void> {
     if (this.channelId === channelId) return;
-    if (this.channelId) this.leave();
+    // Kanal DEĞİŞTİRME (aynı sunucuda) — sessize alma/kulaklık kapatma
+    // korunsun, resetlenmesin. `leave(true)` bu yüzden sıfırlamayı atlıyor.
+    if (this.channelId) this.leave(true);
 
     const store = useStore.getState();
     store.setVoiceConnecting(true);
@@ -85,6 +90,11 @@ class VoiceManager {
     store.setVoiceConnecting(false);
     this.setupSpeakingDetection();
 
+    // Kalabalık bir kanala girince sunucunun gönderdiği "mevcut durum"
+    // yakalama paketleri katılma OLAYI sayılıp art arda ses çalmasın.
+    suppressChimesForCatchUp();
+    if (!store.selfDeaf) playVoiceChime('join');
+
     gateway.sendOp(GatewayOp.VOICE_STATE, {
       channelId,
       selfMute: store.selfMute,
@@ -93,8 +103,18 @@ class VoiceManager {
     });
   }
 
-  leave(): void {
+  /**
+   * @param switchingChannel `join()` başka bir kanala geçerken önce buraya
+   * uğrar — bu durumda sessize alma/kulaklık kapatma tercihimi KORUMALIYIM
+   * (bkz. resetVoiceSession yorumu: normalde tam ayrılışta sıfırlanır).
+   * Gerçek "ayrıl" (kullanıcı düğmeye bastı) her zaman sıfırlar — Discord'da
+   * da tam bağlantı kesilince mikrofon/kulaklık varsayılana döner.
+   */
+  leave(switchingChannel = false): void {
     if (!this.channelId) return;
+    // resetVoiceSession() selfDeaf'i hemen sıfırlıyor — önce oku.
+    const { selfMute, selfDeaf } = useStore.getState();
+    if (!selfDeaf) playVoiceChime('leave');
     gateway.sendOp(GatewayOp.VOICE_STATE, { channelId: null });
 
     this.stopScreenShareTracks();
@@ -109,7 +129,12 @@ class VoiceManager {
     this.audioContext = null;
 
     this.channelId = null;
+    this.serverMuteLocked = false;
     useStore.getState().resetVoiceSession();
+    if (switchingChannel) {
+      useStore.getState().setSelfMute(selfMute);
+      useStore.getState().setSelfDeaf(selfDeaf);
+    }
   }
 
   rejoinAfterReconnect(): void {
@@ -127,11 +152,57 @@ class VoiceManager {
   /* -------- Mikrofon / kulaklık -------- */
 
   setMute(mute: boolean): void {
+    // Sunucu-taraflı susturma kilidi açıkken kendi kendine açamaz —
+    // yalnızca yetkili biri VOICE_FORCE_MUTE(false) gönderip kilidi kaldırabilir.
+    if (this.serverMuteLocked && !mute) return;
     const store = useStore.getState();
     store.setSelfMute(mute);
     this.applyLocalAudioEnabled();
     if (mute) store.setSpeaking(this.myId, false);
     this.announceState();
+  }
+
+  get isServerMuteLocked(): boolean {
+    return this.serverMuteLocked;
+  }
+
+  /**
+   * VOICE_FORCE_MUTE olayı BANA ait geldiğinde çağrılır (bkz. useGateway.ts).
+   * `muted=true`: mikrofonu zorla kapatır ve kilitler. `muted=false`:
+   * yalnızca kilidi kaldırır — Discord'daki gibi kullanıcı isterse kendi
+   * açar, otomatik açılmaz.
+   */
+  applyServerMute(muted: boolean): void {
+    this.serverMuteLocked = muted;
+    if (muted) {
+      const store = useStore.getState();
+      store.setSelfMute(true);
+      this.applyLocalAudioEnabled();
+      store.setSpeaking(this.myId, false);
+      this.announceState();
+    }
+  }
+
+  /**
+   * VOICE_FORCE_MOVE olayı BANA ait geldiğinde çağrılır (bkz. useGateway.ts).
+   * Sunucu authoritative durumu zaten güncelledi (bkz. gateway/index.ts
+   * forceMoveVoice) — burada yalnızca YEREL mesh'i buna göre yeniden
+   * kuruyoruz: eski kanaldaki eşlerle bağlantıları kapat, kanal id'sini
+   * güncelle. Yeni kanaldaki eşler ayrıca gelecek VOICE_STATE_UPDATE
+   * paketleriyle kurulur (bkz. onVoiceState) — mikrofon akışı zaten açık
+   * olduğu için yeniden `getUserMedia` istemeye gerek yok.
+   */
+  applyServerMove(channelId: string, channelName: string, guildId: string): void {
+    if (this.channelId === channelId) return;
+    for (const peerId of [...this.peers.keys()]) this.closePeer(peerId);
+    this.channelId = channelId;
+    useStore.getState().setVoiceChannel(channelId);
+    // Hedef kanalda VIEW_CHANNEL olmayabilir — o zaman kanal listemde hiç
+    // görünmez, adını buradan öğreniyorum (bkz. VoiceForceMovePayload
+    // yorumu). VoiceControlBar, guilds.channels'ta bulamazsa buna düşer.
+    useStore.getState().setForcedVoiceChannelInfo({ name: channelName, guildId });
+    suppressChimesForCatchUp();
+    if (!useStore.getState().selfDeaf) playVoiceChime('join');
   }
 
   setDeaf(deaf: boolean): void {
@@ -150,6 +221,48 @@ class VoiceManager {
     const { selfMute, selfDeaf } = useStore.getState();
     const enabled = !selfMute && !selfDeaf;
     this.localStream?.getAudioTracks().forEach((t) => (t.enabled = enabled));
+  }
+
+  /* -------- Kişisel ses karıştırma (yalnızca bende, kimseye yansımaz) -------- */
+
+  /**
+   * Bir eşten gelen sesin ÇARPIMSAL etkin seviyesi: kanal seviyesi × o
+   * kullanıcının seviyesi. "100 -> kanalda 90 -> kullanıcıda %10" örneği
+   * tam olarak bunu ifade ediyor: 0.90 × 0.10 = 0.09 (orijinalin %9'u).
+   * Sessize alınmışsa (mutedPeerIds) sürgüleri hiç saymadan doğrudan 0.
+   */
+  private effectiveVolume(peerId: string): number {
+    const store = useStore.getState();
+    if (store.mutedPeerIds.has(peerId)) return 0;
+    const channelPercent = (this.channelId ? store.channelVolumes.get(this.channelId) : undefined) ?? 100;
+    const userPercent = store.userVolumes.get(peerId) ?? 100;
+    return (channelPercent / 100) * (userPercent / 100);
+  }
+
+  private applyVolumeFor(peerId: string): void {
+    const peer = this.peers.get(peerId);
+    if (!peer) return;
+    const volume = this.effectiveVolume(peerId);
+    for (const audio of peer.audios.values()) audio.volume = volume;
+  }
+
+  /** Şu an bağlı olduğum kanalın sesini (bende) 0-100 arasında ayarla. */
+  setChannelVolume(channelId: string, percent: number): void {
+    useStore.getState().setChannelVolume(channelId, percent);
+    if (channelId !== this.channelId) return; // yalnızca ekrana yansıyan değer güncellendi
+    for (const peerId of this.peers.keys()) this.applyVolumeFor(peerId);
+  }
+
+  /** Belirli bir kullanıcının sesini (bende) 0-100 arasında ayarla. */
+  setUserVolume(peerId: string, percent: number): void {
+    useStore.getState().setUserVolume(peerId, percent);
+    this.applyVolumeFor(peerId);
+  }
+
+  /** Bir kullanıcıyı bende hızlıca sessize al/aç — sürgüyü sıfırlamaz. */
+  setPeerMuted(peerId: string, muted: boolean): void {
+    useStore.getState().setPeerMuted(peerId, muted);
+    this.applyVolumeFor(peerId);
   }
 
   /* -------- Ekran paylaşımı -------- */
@@ -318,6 +431,7 @@ class VoiceManager {
     const audio = new Audio();
     audio.autoplay = true;
     audio.muted = useStore.getState().selfDeaf;
+    audio.volume = this.effectiveVolume(peerId);
     audio.srcObject = stream;
     peer.audios.set(stream.id, audio);
     // İlk ses akışını mikrofon kabul edip konuşma analizine bağla.

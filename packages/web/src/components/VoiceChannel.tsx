@@ -4,30 +4,93 @@
  *  - VoiceControlBar: bağlıyken alt kullanıcı çubuğunun üstünde mute/deafen/ayrıl
  *
  * Konuşma göstergesi: aktif konuşanın avatarı yeşil halkayla çevrelenir.
+ *
+ * Ses seviyesi + susturma menüleri (sağ tık):
+ *  - Kanal satırı → "Kanal Sesi" (bende, kanaldaki HERKESİ birlikte etkiler).
+ *  - Katılımcı satırı → "Kullanıcı Sesi" (bende, yalnızca o kişi), "Sessize
+ *    Al" (bende, izinsiz — herkes herkesi yapabilir), "Sunucuda Sustur"
+ *    (MUTE_MEMBERS izniyle, HERKESİ etkiler — bkz. voice.ts uyarısı: mesh
+ *    P2P'de bu bir istek, kriptografik zorlama değil), "Engelle".
  */
 
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  ArrowRightLeft,
   Headphones,
+  Lock,
+  MessageSquare,
   Mic,
   MicOff,
   MonitorUp,
   MonitorX,
   PhoneOff,
   ScreenShare,
+  ShieldOff,
+  UserX,
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import type { APIChannel } from '@tuscord/shared';
+import { defaultStickerForChannel, type APIBlock, type APIChannel } from '@tuscord/shared';
 import { useStore } from '../store';
 import { voice } from '../lib/voice';
+import { api } from '../lib/api';
 import { Avatar } from './Avatar';
+import type { MenuItem } from './ContextMenu';
+import { VoiceContextMenu } from './VoiceContextMenu';
+import { BlockConfirmModal } from './BlockConfirmModal';
+
+/**
+ * Bir katılımcıyı sürükleyip başka bir ses kanalının üstüne bırakınca taşımak
+ * için özel drag veri tipi — kanal sıralaması sürüklemesiyle (bkz.
+ * ChatShell.tsx ChannelList) karışmasın diye ayrı. `dragover` sırasında
+ * yalnızca `types` okunabilir (tarayıcı güvenliği), asıl veri `drop`ta gelir —
+ * bu yüzden ChannelList hedef satırı bu tipin varlığına bakarak tanır.
+ */
+export const VOICE_USER_DRAG_TYPE = 'application/x-tuscord-voice-user';
+
+/**
+ * Kanal/kullanıcı ses sağ tık menüsünün açık durumu. ChannelList seviyesinde
+ * TEK bir state olarak tutulur (bkz. `menu`/`onOpenMenu` props) — sunucuda
+ * birden çok sesli kanal varsa her biri kendi state'ini tutsaydı, biri
+ * açıkken diğerine sağ tıklamak ikisini de açık bırakırdı (sağ tık
+ * handler'ları `stopPropagation` çağırdığı için `window` seviyesindeki
+ * "dışarı tıklama kapatır" dinleyicisi diğer menüye hiç ulaşmıyordu).
+ */
+export type VoiceMenuState =
+  | { kind: 'channel'; x: number; y: number }
+  | { kind: 'user'; userId: string; x: number; y: number };
 
 export function VoiceChannelItem({
   channel,
+  canServerMute,
+  canMoveMembers,
+  voiceChannels,
+  menu,
+  onOpenMenu,
+  onCloseMenu,
+  extraMenuItems,
   onNavigate,
 }: {
   channel: APIChannel;
+  /** MUTE_MEMBERS iznim var mı — "Sunucuda Sustur" seçeneği buna bağlı. */
+  canServerMute: boolean;
+  /** MOVE_MEMBERS iznim var mı — "Taşı: <kanal>" seçenekleri buna bağlı. */
+  canMoveMembers: boolean;
+  /** Sunucudaki TÜM sesli kanallar — taşıma hedefi listesi burada bunlardan çıkarılır. */
+  voiceChannels: APIChannel[];
+  /** Şu an açık olan menü BU kanala aitse dolu, değilse null (bkz. VoiceMenuState yorumu). */
+  menu: VoiceMenuState | null;
+  onOpenMenu: (state: VoiceMenuState) => void;
+  onCloseMenu: () => void;
+  /**
+   * "Kanal Ayarları" / "Yukarı taşı" / "Aşağı taşı" gibi izne göre görünen
+   * öğeler — ChatShell.tsx'teki `channelMenu(channel)` sonucu. Eskiden
+   * bunlar için ayrı bir sağ tık menüsü vardı: kanalın tam olarak neresine
+   * tıklandığına göre ya bu ya ses seviyesi menüsü açılıyordu, kafa
+   * karıştırıyordu. Artık TEK menüde, ses seviyesinin altında sürer.
+   */
+  extraMenuItems: MenuItem[];
   onNavigate: () => void;
 }) {
   const { t } = useTranslation();
@@ -37,9 +100,69 @@ export function VoiceChannelItem({
   const selfMuteGlobal = useStore((s) => s.selfMute);
   const selfDeafGlobal = useStore((s) => s.selfDeaf);
   const myId = useStore((s) => s.user?.id);
+  const serverMutedUserIds = useStore((s) => s.serverMutedUserIds);
+  const mutedPeerIds = useStore((s) => s.mutedPeerIds);
+  const channelVolumes = useStore((s) => s.channelVolumes);
+  const userVolumes = useStore((s) => s.userVolumes);
+  const blocks = useStore((s) => s.blocks);
+  const addBlock = useStore((s) => s.addBlock);
+  const removeBlock = useStore((s) => s.removeBlock);
   const connectedHere = voiceChannelId === channel.id;
 
+  const [pendingBlock, setPendingBlock] = useState<{ id: string; name: string } | null>(null);
+
   const participants = roster ? [...roster.values()] : [];
+
+  // Menüdeki katılımcı satırının aksiyonları — canlı state'ten türetilir ki
+  // menü açıkken biri sessize alınır/susturulursa etiket hemen güncellensin.
+  const menuParticipant =
+    menu?.kind === 'user' ? participants.find((p) => p.user.id === menu.userId) : undefined;
+  const menuMutedByMe = menuParticipant ? mutedPeerIds.has(menuParticipant.user.id) : false;
+  const menuServerMuted = menuParticipant ? serverMutedUserIds.has(menuParticipant.user.id) : false;
+  const menuIsBlocked = menuParticipant
+    ? blocks.some((b) => b.user.id === menuParticipant.user.id)
+    : false;
+  const userMenuItems: MenuItem[] = menuParticipant
+    ? [
+        {
+          label: menuMutedByMe ? t('voice.unmutePeer') : t('voice.mutePeer'),
+          icon: menuMutedByMe ? <Volume2 size={15} /> : <VolumeX size={15} />,
+          onClick: () => voice.setPeerMuted(menuParticipant.user.id, !menuMutedByMe),
+        },
+        ...(canServerMute
+          ? [
+              {
+                label: menuServerMuted ? t('voice.serverUnmute') : t('voice.serverMute'),
+                icon: menuServerMuted ? <Lock size={15} /> : <ShieldOff size={15} />,
+                onClick: () => void toggleServerMute(menuParticipant.user.id, !menuServerMuted),
+              } satisfies MenuItem,
+            ]
+          : []),
+        // Taşıma hedefi mevcut kanalın kendisi hariç diğer tüm sesli kanallar —
+        // hedefte CONNECT izni olması gerekmez, bkz. moderation.ts voice-move.
+        ...(canMoveMembers
+          ? voiceChannels
+              .filter((c) => c.id !== channel.id)
+              .map(
+                (target): MenuItem => ({
+                  label: t('voice.moveTo', { channel: target.name }),
+                  icon: <ArrowRightLeft size={15} />,
+                  onClick: () => void moveMember(menuParticipant.user.id, target.id),
+                }),
+              )
+          : []),
+        {
+          label: menuIsBlocked ? t('profile.unblock') : t('profile.block'),
+          icon: <UserX size={15} />,
+          danger: !menuIsBlocked,
+          onClick: () =>
+            void toggleBlock(
+              menuParticipant.user.id,
+              menuParticipant.user.displayName ?? menuParticipant.user.username,
+            ),
+        },
+      ]
+    : [];
 
   async function join() {
     onNavigate();
@@ -51,18 +174,68 @@ export function VoiceChannelItem({
     }
   }
 
+  async function toggleServerMute(userId: string, muted: boolean) {
+    await api
+      .put(`/guilds/${channel.guildId}/members/${userId}/voice-mute`, { muted })
+      .catch(() => undefined); // 403/hiyerarşi hatası — sessizce geç, buton zaten izne göre gizli
+  }
+
+  async function moveMember(userId: string, targetChannelId: string) {
+    await api
+      .put(`/guilds/${channel.guildId}/members/${userId}/voice-move`, { channelId: targetChannelId })
+      .catch(() => undefined); // 403/hiyerarşi hatası — sessizce geç, buton zaten izne göre gizli
+  }
+
+  async function toggleBlock(userId: string, name: string) {
+    const isBlocked = blocks.some((b) => b.user.id === userId);
+    if (isBlocked) {
+      await api.delete(`/users/@me/blocks/${userId}`).catch(() => undefined);
+      removeBlock(userId);
+    } else {
+      setPendingBlock({ id: userId, name }); // onay bizim modalımızda — bkz. aşağıdaki render
+    }
+  }
+
+  async function confirmBlock() {
+    if (!pendingBlock) return;
+    const { id } = pendingBlock;
+    setPendingBlock(null);
+    const block = await api.put<APIBlock>(`/users/@me/blocks/${id}`).catch(() => null);
+    if (block) addBlock(block);
+  }
+
   return (
-    <div>
+    <div
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Satırın HERHANGİ bir yerine (buton, katılımcı listesi altındaki
+        // boşluklar) sağ tık — hep AYNI birleşik menü açılır (bkz.
+        // extraMenuItems yorumu). Bir katılımcının kendi satırı bunu
+        // kendi onContextMenu'sünde durdurup (stopPropagation) kullanıcı
+        // menüsünü açar, buraya hiç düşmez.
+        onOpenMenu({ kind: 'channel', x: e.clientX, y: e.clientY });
+      }}
+    >
       <button
         type="button"
         onClick={() => void join()}
-        className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm ${
+        className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-base ${
           connectedHere
             ? 'text-[var(--color-ink)]'
             : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]'
         }`}
       >
-        <Volume2 size={14} className="shrink-0" />
+        {/* Sesli kanal sticker'ı: elle seçilmişse `channel.sticker`, yoksa kanal
+            id'sinden türetilen sabit varsayılan (bkz. shared/limits.ts). Kanal
+            Ayarları'ndan değiştirilebilir. Metin kanalları Hash (#) ile
+            göstermeye devam ediyor, burası dokunulmadı. */}
+        <span
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-xs leading-none"
+          aria-hidden="true"
+        >
+          {channel.sticker ?? defaultStickerForChannel(channel.id)}
+        </span>
         <span className="truncate">{channel.name}</span>
         {participants.length > 0 && (
           <span className="ml-auto text-xs text-[var(--color-ink-faint)]">{participants.length}</span>
@@ -77,8 +250,33 @@ export function VoiceChannelItem({
             // Kendi mute/deafen durumum store'dan; başkalarınınki roster'dan.
             const muted = isMe ? selfMuteGlobal : p.selfMute;
             const deaf = isMe ? selfDeafGlobal : p.selfDeaf;
+            const serverMuted = serverMutedUserIds.has(p.user.id);
+            const mutedByMe = !isMe && mutedPeerIds.has(p.user.id);
+            const isBlocked = blocks.some((b) => b.user.id === p.user.id);
+
             return (
-              <div key={p.user.id} className="flex items-center gap-2 px-1 py-0.5 text-sm">
+              <div
+                key={p.user.id}
+                draggable={canMoveMembers && !isMe}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (isMe) return;
+                  onOpenMenu({ kind: 'user', userId: p.user.id, x: e.clientX, y: e.clientY });
+                }}
+                onDragStart={(e) => {
+                  if (!canMoveMembers || isMe) return;
+                  // Üst kanal satırı da draggable — bu olay ona sıçrarsa kanal
+                  // sıralaması sürüklemesi başlar. Durdurmazsak ikisi çakışır.
+                  e.stopPropagation();
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData(VOICE_USER_DRAG_TYPE, p.user.id);
+                }}
+                onDragEnd={(e) => e.stopPropagation()}
+                className={`flex items-center gap-2 rounded px-1 py-0.5 text-sm ${
+                  canMoveMembers && !isMe ? 'cursor-grab active:cursor-grabbing' : ''
+                }`}
+              >
                 <span
                   className={`shrink-0 rounded-full ${
                     isSpeaking ? 'ring-2 ring-[var(--color-online)]' : 'ring-2 ring-transparent'
@@ -95,6 +293,12 @@ export function VoiceChannelItem({
                       <ScreenShare size={10} /> {t('voice.live')}
                     </span>
                   ) : null}
+                  {mutedByMe && (
+                    <VolumeX size={12} className="text-[var(--color-idle)]" aria-label={t('voice.mutedByMe')} />
+                  )}
+                  {serverMuted && (
+                    <Lock size={12} className="text-[var(--color-danger)]" aria-label={t('voice.serverMuted')} />
+                  )}
                   {deaf ? <Headphones size={12} className="text-[var(--color-danger)]" /> : null}
                   {muted ? <MicOff size={12} className="text-[var(--color-danger)]" /> : null}
                 </span>
@@ -102,6 +306,35 @@ export function VoiceChannelItem({
             );
           })}
         </div>
+      )}
+      {menu?.kind === 'channel' && (
+        <VoiceContextMenu
+          x={menu.x}
+          y={menu.y}
+          volumeLabel={t('voice.channelVolume')}
+          volumeValue={channelVolumes.get(channel.id) ?? 100}
+          onVolumeChange={(v) => voice.setChannelVolume(channel.id, v)}
+          items={extraMenuItems}
+          onClose={onCloseMenu}
+        />
+      )}
+      {menu?.kind === 'user' && menuParticipant && (
+        <VoiceContextMenu
+          x={menu.x}
+          y={menu.y}
+          volumeLabel={t('voice.userVolume')}
+          volumeValue={userVolumes.get(menuParticipant.user.id) ?? 100}
+          onVolumeChange={(v) => voice.setUserVolume(menuParticipant.user.id, v)}
+          items={userMenuItems}
+          onClose={onCloseMenu}
+        />
+      )}
+      {pendingBlock && (
+        <BlockConfirmModal
+          name={pendingBlock.name}
+          onConfirm={() => void confirmBlock()}
+          onCancel={() => setPendingBlock(null)}
+        />
       )}
     </div>
   );
@@ -115,20 +348,38 @@ export function VoiceControlBar() {
   const selfMute = useStore((s) => s.selfMute);
   const selfDeaf = useStore((s) => s.selfDeaf);
   const selfSharing = useStore((s) => s.selfSharing);
+  const voiceChatOpen = useStore((s) => s.voiceChatOpen);
+  const setVoiceChatOpen = useStore((s) => s.setVoiceChatOpen);
   const guilds = useStore((s) => s.guilds);
+  const myId = useStore((s) => s.user?.id);
+  const serverMutedUserIds = useStore((s) => s.serverMutedUserIds);
+  const serverMuteLocked = myId ? serverMutedUserIds.has(myId) : false;
+  const forcedInfo = useStore((s) => s.forcedVoiceChannelInfo);
 
   if (!voiceChannelId && !connecting) return null;
 
   // Bağlı olduğum ses kanalının adı + sunucusu.
   let channelName = '';
   let guildName = '';
+  let channelVisible = false;
   for (const g of guilds.values()) {
     const ch = g.channels.find((c) => c.id === voiceChannelId);
     if (ch) {
       channelName = ch.name ?? '';
       guildName = g.guild.name;
+      channelVisible = true;
       break;
     }
+  }
+  // Kanal listemde YOK — MOVE_MEMBERS ile VIEW_CHANNEL iznim olmayan bir
+  // kanala taşınmışım demektir (bkz. forcedVoiceChannelInfo yorumu). Adını/
+  // sunucusunu oradan al — kanal + katılımcı listesi artık ChannelList'te
+  // sentetik bir satır olarak, DİĞER sesli kanallarla aynı görünümde
+  // gösteriliyor (bkz. ChatShell.tsx forcedChannel), burada TEKRAR
+  // göstermeye gerek yok.
+  if (!channelVisible && forcedInfo) {
+    channelName = forcedInfo.name;
+    guildName = guilds.get(forcedInfo.guildId)?.guild.name ?? guildName;
   }
 
   return (
@@ -145,13 +396,26 @@ export function VoiceControlBar() {
         </div>
       </div>
 
+      {serverMuteLocked && (
+        <p className="flex items-center gap-1.5 rounded bg-[var(--color-danger)]/15 px-2 py-1 text-xs text-[var(--color-danger)]">
+          <Lock size={12} /> {t('voice.youAreServerMuted')}
+        </p>
+      )}
+
       <div className="flex items-center gap-1">
         <ControlButton
           active={selfMute}
-          label={selfMute ? t('voice.unmute') : t('voice.mute')}
+          disabled={serverMuteLocked && !selfMute}
+          label={
+            serverMuteLocked
+              ? t('voice.youAreServerMuted')
+              : selfMute
+                ? t('voice.unmute')
+                : t('voice.mute')
+          }
           onClick={() => voice.setMute(!selfMute)}
         >
-          {selfMute ? <MicOff size={16} /> : <Mic size={16} />}
+          {serverMuteLocked ? <Lock size={16} /> : selfMute ? <MicOff size={16} /> : <Mic size={16} />}
         </ControlButton>
         <ControlButton
           active={selfDeaf}
@@ -166,6 +430,13 @@ export function VoiceControlBar() {
           onClick={() => (selfSharing ? voice.stopScreenShare() : void voice.startScreenShare())}
         >
           {selfSharing ? <MonitorX size={16} /> : <MonitorUp size={16} />}
+        </ControlButton>
+        <ControlButton
+          active={voiceChatOpen}
+          label={voiceChatOpen ? t('voice.hideChat') : t('voice.chat')}
+          onClick={() => setVoiceChatOpen(!voiceChatOpen)}
+        >
+          <MessageSquare size={16} />
         </ControlButton>
         <button
           type="button"
@@ -183,11 +454,13 @@ export function VoiceControlBar() {
 
 function ControlButton({
   active,
+  disabled,
   label,
   onClick,
   children,
 }: {
   active: boolean;
+  disabled?: boolean;
   label: string;
   onClick: () => void;
   children: React.ReactNode;
@@ -196,9 +469,10 @@ function ControlButton({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       title={label}
       aria-label={label}
-      className={`flex flex-1 items-center justify-center rounded px-2 py-1.5 transition ${
+      className={`flex flex-1 items-center justify-center rounded px-2 py-1.5 transition disabled:cursor-not-allowed disabled:opacity-60 ${
         active
           ? 'bg-[var(--color-danger)]/15 text-[var(--color-danger)]'
           : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]'

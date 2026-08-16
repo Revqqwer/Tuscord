@@ -10,9 +10,12 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, Hash, Minus, Plus, Trash2, X } from 'lucide-react';
 import {
+  CHANNEL_STICKERS,
+  ChannelType,
   Limits,
   Permission,
   channelNameError,
+  defaultStickerForChannel,
   has,
   type APIChannel,
   type APIPermissionOverwrite,
@@ -53,6 +56,8 @@ export function ChannelSettings({ channel, roles, onClose }: Props) {
   const [slowmode, setSlowmode] = useState(channel.slowmodeSeconds);
   const [nsfw, setNsfw] = useState(channel.nsfw);
   const [locked, setLocked] = useState(channel.locked);
+  /** Yalnızca sesli kanal; null = kanal id'sinden türetilen sabit varsayılan. */
+  const [sticker, setSticker] = useState<string | null>(channel.sticker);
   const [overwrites, setOverwrites] = useState<APIPermissionOverwrite[]>(channel.overwrites ?? []);
   const [saving, setSaving] = useState(false);
 
@@ -83,8 +88,11 @@ export function ChannelSettings({ channel, roles, onClose }: Props) {
         slowmodeSeconds: slowmode,
         nsfw,
         locked,
+        // Metin kanalında sticker anlamsız — yalnızca sesli kanalda gönder.
+        ...(channel.type === ChannelType.GUILD_VOICE ? { sticker } : {}),
       });
       upsertChannel(updated);
+      onClose();
     } finally {
       setSaving(false);
     }
@@ -223,6 +231,42 @@ export function ChannelSettings({ channel, roles, onClose }: Props) {
               </Field>
               <Toggle label={t('channelSettings.nsfw')} checked={nsfw} onChange={setNsfw} />
               <Toggle label={t('channelSettings.locked')} checked={locked} onChange={setLocked} />
+
+              {channel.type === ChannelType.GUILD_VOICE && (
+                <Field label={t('channelSettings.sticker')}>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSticker(null)}
+                      title={t('channelSettings.stickerDefault')}
+                      aria-label={t('channelSettings.stickerDefault')}
+                      aria-pressed={sticker === null}
+                      className={`flex h-9 w-9 items-center justify-center rounded-full border text-base transition ${
+                        sticker === null
+                          ? 'border-[var(--color-brand)] bg-[var(--color-brand)]/10'
+                          : 'border-[var(--color-line)] hover:bg-[var(--color-surface-2)]'
+                      }`}
+                    >
+                      {defaultStickerForChannel(channel.id)}
+                    </button>
+                    {CHANNEL_STICKERS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => setSticker(emoji)}
+                        aria-pressed={sticker === emoji}
+                        className={`flex h-9 w-9 items-center justify-center rounded-full border text-base transition ${
+                          sticker === emoji
+                            ? 'border-[var(--color-brand)] bg-[var(--color-brand)]/10'
+                            : 'border-[var(--color-line)] hover:bg-[var(--color-surface-2)]'
+                        }`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+              )}
 
               <div className="flex items-center gap-3 pt-2">
                 <button

@@ -32,6 +32,60 @@ interface Props {
   onClose: () => void;
 }
 
+/** Bir kanalda VIEW_CHANNEL için rolün taşıdığı overwrite durumu. */
+type ViewOverride = 'allow' | 'deny' | 'inherit';
+
+/**
+ * Kanalın GERÇEK (sunucudaki) overwrite'ından bu rol için VIEW_CHANNEL
+ * durumunu okur — taslağın BAŞLANGIÇ noktası ve "değişti mi" kıyaslaması
+ * bunun üzerinden yapılır.
+ */
+function currentViewOverride(channel: APIChannel, roleId: string): ViewOverride {
+  const overwrite = channel.overwrites?.find((o) => o.targetType === 'role' && o.targetId === roleId);
+  if (!overwrite) return 'inherit';
+  if (has(BigInt(overwrite.deny), Permission.VIEW_CHANNEL)) return 'deny';
+  if (has(BigInt(overwrite.allow), Permission.VIEW_CHANNEL)) return 'allow';
+  return 'inherit';
+}
+
+/** Bir override + temel izin verildiğinde kanalın görünür olup olmadığı. */
+function resolveVisible(override: ViewOverride, basePermissions: string): boolean {
+  if (override === 'deny') return false;
+  if (override === 'allow') return true;
+  return has(BigInt(basePermissions), Permission.VIEW_CHANNEL);
+}
+
+/** Bu rolün TÜM kanalları için başlangıç override haritası (bkz. RoleDraft.channelOverrides). */
+function buildChannelOverrides(
+  channels: readonly APIChannel[],
+  roleId: string,
+): Map<string, ViewOverride> {
+  const map = new Map<string, ViewOverride>();
+  for (const channel of channels) {
+    if (channel.type !== ChannelType.GUILD_TEXT && channel.type !== ChannelType.GUILD_VOICE) continue;
+    map.set(channel.id, currentViewOverride(channel, roleId));
+  }
+  return map;
+}
+
+/** Seçili rolün düzenlenebilir alanlarının yerel taslağı — bkz. RoleSettings yorumu. */
+interface RoleDraft {
+  name: string;
+  color: number;
+  hoist: boolean;
+  mentionable: boolean;
+  /** Bitfield, string (bigint JSON'da taşınamaz — projedeki genel kural). */
+  permissions: string;
+  /**
+   * "Görüntülenecek kanallar" seçicisindeki kanal-özel VIEW_CHANNEL
+   * durumları — ESKİDEN her tıklama anında ayrı bir PUT ile kaydediliyordu,
+   * bu yüzden "Kaydet" hiç görünmüyordu ve diğer taslak alanlarıyla
+   * TUTARSIZDI (bkz. kullanıcı raporu). Artık diğer her şey gibi yalnızca
+   * "Kaydet"e basınca tek seferde gönderilir (bkz. save()).
+   */
+  channelOverrides: Map<string, ViewOverride>;
+}
+
 export function RoleSettings({ guildState, onClose }: Props) {
   const { t } = useTranslation();
   const guildId = guildState.guild.id;
@@ -43,6 +97,13 @@ export function RoleSettings({ guildState, onClose }: Props) {
   const [saving, setSaving] = useState(false);
   /** "Görüntülenecek kanalları seç" akordeonu — rol değişince kapanmaz. */
   const [channelPickerOpen, setChannelPickerOpen] = useState(false);
+  /**
+   * Seçili rolün DÜZENLENEBİLİR alanlarının yerel taslağı — her değişiklik
+   * artık anında sunucuya gitmez, yalnızca "Kaydet"e basınca tek bir PATCH
+   * ile gönderilir. Rol değişince (ya da kaydettikten sonra) `selected`'tan
+   * yeniden kurulur (bkz. aşağıdaki useEffect).
+   */
+  const [draft, setDraft] = useState<RoleDraft | null>(null);
 
   const isOwner = currentUserId === guildState.guild.ownerId;
 
@@ -51,6 +112,14 @@ export function RoleSettings({ guildState, onClose }: Props) {
     if (isOwner) return ALL_PERMISSIONS;
     return BigInt(guildState.permissions);
   }, [guildState.permissions, isOwner]);
+
+  /**
+   * Rol TANIMLARINI düzenleme (ad/renk/izinler/kanal görünürlüğü/oluşturma/
+   * silme) — ASSIGN_ROLES'ten AYRI bir yetki (bkz. permissions.ts yorumu).
+   * Yalnızca ASSIGN_ROLES taşıyan biri bu ekranı açabilir (bkz. ChatShell.tsx
+   * canManageRoles) ama yalnızca "Bu roldeki üyeler" bölümünü kullanabilmeli.
+   */
+  const canEditRoleDefs = has(ownPermissions, Permission.MANAGE_ROLES);
 
   /** Kullanıcının en yüksek rol konumu; hiyerarşi kilidi buna bakar. */
   const ownHighestPosition = useMemo(() => {
@@ -77,15 +146,111 @@ export function RoleSettings({ guildState, onClose }: Props) {
   const isEveryone = selected?.id === guildId;
   const locked = selected !== null && !isOwner && selected.position >= ownHighestPosition;
 
-  async function patch(changes: Partial<APIRole>) {
-    if (!selected) return;
+  // Rol değişince (ya da sunucudan tazelenince) taslağı SIFIRDAN kur —
+  // önceki rolün kaydedilmemiş taslağı bir sonrakine sızmasın.
+  useEffect(() => {
+    setDraft(
+      selected
+        ? {
+            name: selected.name,
+            color: selected.color,
+            hoist: selected.hoist,
+            mentionable: selected.mentionable,
+            permissions: selected.permissions,
+            channelOverrides: buildChannelOverrides(guildState.channels, selected.id),
+          }
+        : null,
+    );
+    // guildState.channels bilinçli DIŞARIDA bırakıldı: yalnızca rol
+    // değişince/kaydedince taslağı sıfırlamak istiyoruz, kanal listesi
+    // KAYDET'ten ÖNCE (bizim taslağımız dururken) başka bir sebeple
+    // güncellenirse taslağımızı ezmesin.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, selected?.name, selected?.color, selected?.hoist, selected?.mentionable, selected?.permissions]);
+
+  const channelOverridesDirty = (() => {
+    if (!draft || !selected) return false;
+    for (const channel of guildState.channels) {
+      if (channel.type !== ChannelType.GUILD_TEXT && channel.type !== ChannelType.GUILD_VOICE) continue;
+      const wanted = draft.channelOverrides.get(channel.id) ?? 'inherit';
+      if (wanted !== currentViewOverride(channel, selected.id)) return true;
+    }
+    return false;
+  })();
+
+  const dirty =
+    !!selected &&
+    !!draft &&
+    (draft.name !== selected.name ||
+      draft.color !== selected.color ||
+      draft.hoist !== selected.hoist ||
+      draft.mentionable !== selected.mentionable ||
+      draft.permissions !== selected.permissions ||
+      channelOverridesDirty);
+
+  function updateDraft(changes: Partial<RoleDraft>) {
+    setDraft((current) => (current ? { ...current, ...changes } : current));
+  }
+
+  function updateChannelOverride(channelId: string, next: ViewOverride) {
+    setDraft((current) => {
+      if (!current) return current;
+      const channelOverrides = new Map(current.channelOverrides);
+      channelOverrides.set(channelId, next);
+      return { ...current, channelOverrides };
+    });
+  }
+
+  async function save() {
+    if (!selected || !draft || !dirty) return;
     setSaving(true);
     setError(null);
     try {
-      const updated = await api.patch<APIRole>(`/guilds/${guildId}/roles/${selected.id}`, changes);
-      setRoles((current) =>
-        current.map((role) => (role.id === updated.id ? updated : role)),
-      );
+      // Yalnızca DEĞİŞEN alanları gönder — dokunulmayanlar audit kaydında
+      // gürültü olmasın.
+      const changes: Partial<APIRole> = {};
+      if (draft.name !== selected.name) changes.name = draft.name;
+      if (draft.color !== selected.color) changes.color = draft.color;
+      if (draft.hoist !== selected.hoist) changes.hoist = draft.hoist;
+      if (draft.mentionable !== selected.mentionable) changes.mentionable = draft.mentionable;
+      if (draft.permissions !== selected.permissions) changes.permissions = draft.permissions;
+
+      const [updated] = await Promise.all([
+        Object.keys(changes).length > 0
+          ? api.patch<APIRole>(`/guilds/${guildId}/roles/${selected.id}`, changes)
+          : Promise.resolve(selected),
+        // Yalnızca GERÇEKTEN değişen kanal overwrite'larını gönder — diğer
+        // izin bitlerine dokunmadan yalnızca VIEW_CHANNEL'ı hedefler.
+        ...guildState.channels
+          .filter((c) => c.type === ChannelType.GUILD_TEXT || c.type === ChannelType.GUILD_VOICE)
+          .map((channel) => {
+            const wanted = draft.channelOverrides.get(channel.id) ?? 'inherit';
+            const current = currentViewOverride(channel, selected.id);
+            if (wanted === current) return null;
+            const overwrite = channel.overwrites?.find(
+              (o) => o.targetType === 'role' && o.targetId === selected.id,
+            );
+            let allow = overwrite ? BigInt(overwrite.allow) : 0n;
+            let deny = overwrite ? BigInt(overwrite.deny) : 0n;
+            if (wanted === 'allow') {
+              allow |= Permission.VIEW_CHANNEL;
+              deny &= ~Permission.VIEW_CHANNEL;
+            } else if (wanted === 'deny') {
+              deny |= Permission.VIEW_CHANNEL;
+              allow &= ~Permission.VIEW_CHANNEL;
+            } else {
+              allow &= ~Permission.VIEW_CHANNEL;
+              deny &= ~Permission.VIEW_CHANNEL;
+            }
+            return api.put(`/channels/${channel.id}/permissions/${selected.id}`, {
+              targetType: 'role',
+              allow: allow.toString(),
+              deny: deny.toString(),
+            });
+          })
+          .filter((p): p is Promise<unknown> => p !== null),
+      ]);
+      setRoles((current) => current.map((role) => (role.id === updated.id ? updated : role)));
     } catch (caught) {
       setError(
         caught instanceof ApiError && caught.code === 'cannot_grant_permissions'
@@ -101,12 +266,44 @@ export function RoleSettings({ guildState, onClose }: Props) {
     }
   }
 
-  function togglePermission(name: PermissionName, enabled: boolean) {
+  function discard() {
     if (!selected) return;
+    setDraft({
+      name: selected.name,
+      color: selected.color,
+      hoist: selected.hoist,
+      mentionable: selected.mentionable,
+      permissions: selected.permissions,
+      channelOverrides: buildChannelOverrides(guildState.channels, selected.id),
+    });
+  }
+
+  function togglePermission(name: PermissionName, enabled: boolean) {
+    if (!draft) return;
     const bit = Permission[name];
-    const current = BigInt(selected.permissions);
+    const current = BigInt(draft.permissions);
     const next = enabled ? current | bit : current & ~bit;
-    void patch({ permissions: next.toString() });
+    updateDraft({ permissions: next.toString() });
+  }
+
+  /**
+   * "Kanalları görüntüle" ana kutusu — "tümünü seç / tümünü kaldır" gibi
+   * davranır: işaretlenince temel izin AÇILIR ve HER kanala açık bir "allow"
+   * yazılır; kaldırılınca temel izin KAPANIR ve HER kanala açık bir "deny"
+   * yazılır. Kısmi durumdan (bazı kanallar açık, bazıları kapalı) çıkışı
+   * öngörülebilir kılar — tek tek kanalları elle düzeltmeye gerek kalmaz.
+   */
+  function toggleViewChannelAll(enabled: boolean) {
+    if (!draft) return;
+    const bit = Permission.VIEW_CHANNEL;
+    const current = BigInt(draft.permissions);
+    const permissions = (enabled ? current | bit : current & ~bit).toString();
+    const channelOverrides = new Map(draft.channelOverrides);
+    for (const channel of guildState.channels) {
+      if (channel.type !== ChannelType.GUILD_TEXT && channel.type !== ChannelType.GUILD_VOICE) continue;
+      channelOverrides.set(channel.id, enabled ? 'allow' : 'deny');
+    }
+    updateDraft({ permissions, channelOverrides });
   }
 
   async function createRole() {
@@ -178,18 +375,21 @@ export function RoleSettings({ guildState, onClose }: Props) {
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={() => void createRole()}
-              className="m-2 flex items-center justify-center gap-1 rounded bg-[var(--color-brand)] px-2 py-1.5 text-sm font-medium text-black"
-            >
-              <Plus size={14} /> {t('roles.create')}
-            </button>
+            {canEditRoleDefs && (
+              <button
+                type="button"
+                onClick={() => void createRole()}
+                className="m-2 flex items-center justify-center gap-1 rounded bg-[var(--color-brand)] px-2 py-1.5 text-sm font-medium text-black"
+              >
+                <Plus size={14} /> {t('roles.create')}
+              </button>
+            )}
           </div>
 
           {/* Seçili rolün ayarları */}
+          <div className="flex min-w-0 flex-1 flex-col">
           <div className="min-w-0 flex-1 overflow-y-auto p-4">
-            {!selected ? (
+            {!selected || !draft ? (
               <p className="text-sm text-[var(--color-ink-faint)]">{t('common.loading')}</p>
             ) : (
               <>
@@ -202,6 +402,12 @@ export function RoleSettings({ guildState, onClose }: Props) {
                 {locked && (
                   <p className="mb-3 rounded bg-[var(--color-idle)]/15 px-3 py-2 text-sm text-[var(--color-idle)]">
                     {t('roles.lockedByHierarchy')}
+                  </p>
+                )}
+
+                {!locked && !canEditRoleDefs && (
+                  <p className="mb-3 rounded bg-[var(--color-surface-2)] px-3 py-2 text-sm text-[var(--color-ink-muted)]">
+                    {t('roles.assignOnlyNote')}
                   </p>
                 )}
 
@@ -218,12 +424,9 @@ export function RoleSettings({ guildState, onClose }: Props) {
                         {t('roles.name')}
                       </span>
                       <input
-                        defaultValue={selected.name}
-                        disabled={locked || saving}
-                        onBlur={(event) => {
-                          const value = event.target.value.trim();
-                          if (value && value !== selected.name) void patch({ name: value });
-                        }}
+                        value={draft.name}
+                        disabled={locked || saving || !canEditRoleDefs}
+                        onChange={(event) => updateDraft({ name: event.target.value })}
                         className="rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-1.5 outline-none focus:border-[var(--color-brand)] disabled:opacity-50"
                       />
                     </label>
@@ -234,32 +437,30 @@ export function RoleSettings({ guildState, onClose }: Props) {
                       </span>
                       <input
                         type="color"
-                        disabled={locked || saving}
-                        value={`#${selected.color.toString(16).padStart(6, '0')}`}
-                        onChange={(event) =>
-                          void patch({ color: parseInt(event.target.value.slice(1), 16) })
-                        }
+                        disabled={locked || saving || !canEditRoleDefs}
+                        value={`#${draft.color.toString(16).padStart(6, '0')}`}
+                        onChange={(event) => updateDraft({ color: parseInt(event.target.value.slice(1), 16) })}
                         className="h-9 w-16 rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] disabled:opacity-50"
                       />
                     </label>
 
                     <Toggle
                       label={t('roles.hoist')}
-                      checked={selected.hoist}
-                      disabled={locked || saving}
-                      onChange={(value) => void patch({ hoist: value })}
+                      checked={draft.hoist}
+                      disabled={locked || saving || !canEditRoleDefs}
+                      onChange={(value) => updateDraft({ hoist: value })}
                     />
                     <Toggle
                       label={t('roles.mentionable')}
-                      checked={selected.mentionable}
-                      disabled={locked || saving}
-                      onChange={(value) => void patch({ mentionable: value })}
+                      checked={draft.mentionable}
+                      disabled={locked || saving || !canEditRoleDefs}
+                      onChange={(value) => updateDraft({ mentionable: value })}
                     />
 
                     <button
                       type="button"
                       onClick={() => void deleteRole()}
-                      disabled={locked}
+                      disabled={locked || !canEditRoleDefs}
                       className="ml-auto flex items-center gap-1 rounded px-2 py-1.5 text-sm text-[var(--color-danger)] hover:bg-[var(--color-surface-2)] disabled:opacity-40"
                     >
                       <Trash2 size={14} /> {t('roles.delete')}
@@ -267,7 +468,23 @@ export function RoleSettings({ guildState, onClose }: Props) {
                   </div>
                 )}
 
-                {PERMISSION_GROUPS.map((group) => (
+                {(() => {
+                  // VIEW_CHANNEL satırında "Kısmi" göstergesi: bu rol kanalların
+                  // BAZILARINI görüp bazılarını göremiyorsa (kanal-özel overwrite
+                  // taslağı yüzünden), temel izin biti tek başına yanıltıcı olur —
+                  // "kapalı" görünür ama aslında bazı kanallar açık. Taslakta henüz
+                  // KAYDEDİLMEMİŞ değişiklikler de (hem temel izin hem kanal
+                  // overwrite'ları) hesaba katılır.
+                  const relevantChannels = guildState.channels.filter(
+                    (c) => c.type === ChannelType.GUILD_TEXT || c.type === ChannelType.GUILD_VOICE,
+                  );
+                  const visibleCount = relevantChannels.filter((c) =>
+                    resolveVisible(draft.channelOverrides.get(c.id) ?? 'inherit', draft.permissions),
+                  ).length;
+                  const viewChannelPartial =
+                    relevantChannels.length > 0 && visibleCount > 0 && visibleCount < relevantChannels.length;
+
+                  return PERMISSION_GROUPS.map((group) => (
                   <section key={group.id} className="mb-5">
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
                       {t(`roles.groups.${group.id}`)}
@@ -275,7 +492,13 @@ export function RoleSettings({ guildState, onClose }: Props) {
                     <div className="space-y-1">
                       {group.permissions.map((name) => {
                         const bit = Permission[name];
-                        const enabled = has(BigInt(selected.permissions), bit);
+                        const isViewChannel = name === 'VIEW_CHANNEL';
+                        const partial = isViewChannel && viewChannelPartial;
+                        // VIEW_CHANNEL satırı "en az bir kanal görünür mü"yü
+                        // yansıtır (tek tek kanal işaretlemek de ana kutuyu
+                        // işaretli göstersin diye) — diğer tüm satırlar GERÇEK
+                        // temel izin bitini kullanır, öngörülebilir kural.
+                        const enabled = isViewChannel ? visibleCount > 0 : has(BigInt(draft.permissions), bit);
                         // Sahip olmadığın izni veremezsin (sunucu da reddeder).
                         const cannotGrant = !has(ownPermissions, bit);
                         const row = (
@@ -285,9 +508,10 @@ export function RoleSettings({ guildState, onClose }: Props) {
                             description={t(`roles.permissions.${name}.description`)}
                             danger={name === 'ADMINISTRATOR'}
                             checked={enabled}
-                            disabled={locked || saving || (cannotGrant && !enabled)}
+                            partial={partial}
+                            disabled={locked || saving || !canEditRoleDefs || (cannotGrant && !enabled)}
                             hint={cannotGrant && !enabled ? t('roles.cannotGrant') : undefined}
-                            onChange={(value) => togglePermission(name, value)}
+                            onChange={(value) => (isViewChannel ? toggleViewChannelAll(value) : togglePermission(name, value))}
                             expandable={name === 'VIEW_CHANNEL'}
                             expanded={name === 'VIEW_CHANNEL' ? channelPickerOpen : undefined}
                             onToggleExpand={
@@ -306,9 +530,12 @@ export function RoleSettings({ guildState, onClose }: Props) {
                             {channelPickerOpen && (
                               <ChannelVisibilityPicker
                                 channels={guildState.channels}
-                                role={selected}
-                                disabled={locked || saving}
-                                onError={() => setError(t('common.error'))}
+                                overrides={draft.channelOverrides}
+                                basePermissions={draft.permissions}
+                                disabled={locked || saving || !canEditRoleDefs}
+                                onToggle={(channelId, next) =>
+                                  updateChannelOverride(channelId, next ? 'allow' : 'deny')
+                                }
                               />
                             )}
                           </div>
@@ -316,11 +543,37 @@ export function RoleSettings({ guildState, onClose }: Props) {
                       })}
                     </div>
                   </section>
-                ))}
+                  ));
+                })()}
 
                 {!isEveryone && <RoleMembers guildId={guildId} roleId={selected.id} locked={locked} onChanged={load} />}
               </>
             )}
+          </div>
+
+          {dirty && (
+            <div className="flex items-center gap-3 border-t border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 py-2.5">
+              <span className="text-sm text-[var(--color-ink-muted)]">{t('roles.unsavedChanges')}</span>
+              <div className="ml-auto flex gap-2">
+                <button
+                  type="button"
+                  onClick={discard}
+                  disabled={saving}
+                  className="rounded px-3 py-1.5 text-sm text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+                >
+                  {t('roles.discard')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void save()}
+                  disabled={saving || locked || !canEditRoleDefs}
+                  className="rounded bg-[var(--color-brand)] px-3 py-1.5 text-sm font-medium text-black disabled:opacity-50"
+                >
+                  {t('roles.save')}
+                </button>
+              </div>
+            </div>
+          )}
           </div>
         </div>
       </div>
@@ -332,6 +585,7 @@ function PermissionRow({
   name,
   description,
   checked,
+  partial,
   disabled,
   danger,
   hint,
@@ -343,6 +597,9 @@ function PermissionRow({
   name: string;
   description: string;
   checked: boolean;
+  /** Rol kanalların yalnızca BİR KISMINI görebiliyor (kanal-özel overwrite'lar
+   * yüzünden) — yalnızca VIEW_CHANNEL satırında true olabilir. */
+  partial?: boolean;
   disabled: boolean;
   danger?: boolean;
   hint?: string;
@@ -368,7 +625,12 @@ function PermissionRow({
           className="mt-1 h-4 w-4 accent-[var(--color-brand)]"
         />
         <span className="min-w-0">
-          <span className={`block text-sm ${danger ? 'text-[var(--color-danger)]' : ''}`}>{name}</span>
+          <span className={`flex items-center gap-1.5 text-sm ${danger ? 'text-[var(--color-danger)]' : ''}`}>
+            {name}
+            {partial && (
+              <span className="text-xs font-medium text-[var(--color-brand)]">{t('roles.partial')}</span>
+            )}
+          </span>
           <span className="block text-xs text-[var(--color-ink-faint)]">{description}</span>
         </span>
       </label>
@@ -391,24 +653,26 @@ function PermissionRow({
 /**
  * "Görüntülenecek kanalları seç" — VIEW_CHANNEL satırının altında açılan
  * panel. Metin kanalları solda, ses kanalları sağda; her kanal bu rol için
- * ayrı bir onay kutusu. İşaretlemek/kaldırmak o kanalda role özel bir
- * overwrite yazar (mevcut ChannelSettings overwrite editörüyle AYNI uç,
- * yalnızca VIEW_CHANNEL bitini hedefler — diğer overwrite'lı izinlere
- * dokunmaz).
+ * ayrı bir onay kutusu. Tıklamalar artık SADECE taslağı günceller (bkz.
+ * RoleDraft.channelOverrides) — sunucuya hiçbir şey yazmaz. Eskiden her
+ * tıklama kendi başına anında bir PUT gönderiyordu; bu, "Kaydet" bunu hiç
+ * yansıtmadığı için (dokunulmamış gibi görünüyordu) kullanıcının aynı
+ * kutuya defalarca basıp kendi değişikliğini geri almasına yol açıyordu.
  */
 function ChannelVisibilityPicker({
   channels,
-  role,
+  overrides,
+  basePermissions,
   disabled,
-  onError,
+  onToggle,
 }: {
   channels: readonly APIChannel[];
-  role: APIRole;
+  overrides: Map<string, ViewOverride>;
+  basePermissions: string;
   disabled: boolean;
-  onError: () => void;
+  onToggle: (channelId: string, next: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const [busyId, setBusyId] = useState<string | null>(null);
 
   const textChannels = channels
     .filter((c) => c.type === ChannelType.GUILD_TEXT)
@@ -417,47 +681,8 @@ function ChannelVisibilityPicker({
     .filter((c) => c.type === ChannelType.GUILD_VOICE)
     .sort((a, b) => a.position - b.position);
 
-  function isVisible(channel: APIChannel): boolean {
-    const overwrite = channel.overwrites?.find(
-      (o) => o.targetType === 'role' && o.targetId === role.id,
-    );
-    if (overwrite) {
-      if (has(BigInt(overwrite.deny), Permission.VIEW_CHANNEL)) return false;
-      if (has(BigInt(overwrite.allow), Permission.VIEW_CHANNEL)) return true;
-    }
-    // Overwrite yok ya da VIEW_CHANNEL'a dokunmuyor: rolün kendi temel izni geçerli.
-    return has(BigInt(role.permissions), Permission.VIEW_CHANNEL);
-  }
-
-  async function toggle(channel: APIChannel, next: boolean) {
-    setBusyId(channel.id);
-    try {
-      const overwrite = channel.overwrites?.find(
-        (o) => o.targetType === 'role' && o.targetId === role.id,
-      );
-      let allow = overwrite ? BigInt(overwrite.allow) : 0n;
-      let deny = overwrite ? BigInt(overwrite.deny) : 0n;
-      if (next) {
-        allow |= Permission.VIEW_CHANNEL;
-        deny &= ~Permission.VIEW_CHANNEL;
-      } else {
-        deny |= Permission.VIEW_CHANNEL;
-        allow &= ~Permission.VIEW_CHANNEL;
-      }
-      await api.put(`/channels/${channel.id}/permissions/${role.id}`, {
-        targetType: 'role',
-        allow: allow.toString(),
-        deny: deny.toString(),
-      });
-      // Yeni durum CHANNEL_UPDATE gateway olayıyla geri gelir (bkz.
-      // channels.ts) ve `channels` prop'u store üzerinden tazelenir —
-      // burada elle bir yerel güncelleme gerekmiyor.
-    } catch {
-      onError();
-    } finally {
-      setBusyId(null);
-    }
-  }
+  const isVisible = (channel: APIChannel) =>
+    resolveVisible(overrides.get(channel.id) ?? 'inherit', basePermissions);
 
   return (
     <div className="mb-2 ml-8 grid grid-cols-2 gap-4 rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] p-3">
@@ -465,17 +690,15 @@ function ChannelVisibilityPicker({
         title={t('roles.channelPicker.text')}
         channels={textChannels}
         isVisible={isVisible}
-        busyId={busyId}
         disabled={disabled}
-        onToggle={toggle}
+        onToggle={(channel, next) => onToggle(channel.id, next)}
       />
       <ChannelVisibilityColumn
         title={t('roles.channelPicker.voice')}
         channels={voiceChannels}
         isVisible={isVisible}
-        busyId={busyId}
         disabled={disabled}
-        onToggle={toggle}
+        onToggle={(channel, next) => onToggle(channel.id, next)}
       />
     </div>
   );
@@ -485,14 +708,12 @@ function ChannelVisibilityColumn({
   title,
   channels,
   isVisible,
-  busyId,
   disabled,
   onToggle,
 }: {
   title: string;
   channels: APIChannel[];
   isVisible: (channel: APIChannel) => boolean;
-  busyId: string | null;
   disabled: boolean;
   onToggle: (channel: APIChannel, next: boolean) => void;
 }) {
@@ -514,8 +735,8 @@ function ChannelVisibilityColumn({
               <input
                 type="checkbox"
                 checked={isVisible(channel)}
-                disabled={disabled || busyId === channel.id}
-                onChange={(event) => void onToggle(channel, event.target.checked)}
+                disabled={disabled}
+                onChange={(event) => onToggle(channel, event.target.checked)}
                 className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
               />
               <span className="truncate text-[var(--color-ink-muted)]">{channel.name}</span>

@@ -187,8 +187,9 @@ export function assertCanManageRole(
   guild: GuildContext,
   actor: MemberLike,
   role: RoleLike,
+  requiredPermission?: PermissionBits,
 ): void {
-  if (!canManageRole(guild, actor, role)) {
+  if (!canManageRole(guild, actor, role, requiredPermission)) {
     throw Errors.forbidden('role_hierarchy', 'Bu rol senin en yüksek rolünden yüksek veya eşit');
   }
 }

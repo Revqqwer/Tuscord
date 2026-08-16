@@ -5,8 +5,16 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, Hash, Volume2, X } from 'lucide-react';
-import { ChannelType, Limits, channelNameError, normalizeChannelName } from '@tuscord/shared';
+import { AlertCircle, Hash, Lock, Volume2, X } from 'lucide-react';
+import {
+  ChannelType,
+  Limits,
+  Permission,
+  channelNameError,
+  normalizeChannelName,
+  type APIChannel,
+  type APIRole,
+} from '@tuscord/shared';
 import { api } from '../lib/api';
 
 interface Props {
@@ -14,10 +22,12 @@ interface Props {
   /** Rolde CREATE_TEXT_CHANNELS/CREATE_VOICE_CHANNELS var mı — ilgisiz seçenek devre dışı. */
   canCreateText: boolean;
   canCreateVoice: boolean;
+  /** @everyone dahil sunucudaki tüm roller — "kimler görebilsin" seçici için. */
+  roles: APIRole[];
   onClose: () => void;
 }
 
-export function ChannelCreateModal({ guildId, canCreateText, canCreateVoice, onClose }: Props) {
+export function ChannelCreateModal({ guildId, canCreateText, canCreateVoice, roles, onClose }: Props) {
   const { t } = useTranslation();
   const [name, setName] = useState('');
   // "+" düğmesi zaten yalnızca en az biri açıkken görünür (bkz. ChatShell);
@@ -26,6 +36,12 @@ export function ChannelCreateModal({ guildId, canCreateText, canCreateVoice, onC
     canCreateText ? ChannelType.GUILD_TEXT : ChannelType.GUILD_VOICE,
   );
   const [busy, setBusy] = useState(false);
+  // Varsayılan: herkes görebilir (mevcut davranış). Açılırsa yalnızca
+  // işaretlenen roller görebilsin — @everyone'dan VIEW_CHANNEL düşer,
+  // seçili rollere overwrite ile geri verilir (bkz. create()).
+  const [restricted, setRestricted] = useState(false);
+  const [selectedRoleIds, setSelectedRoleIds] = useState<Set<string>>(new Set());
+  const pickableRoles = roles.filter((r) => r.id !== guildId);
 
   // Sunucu ile AYNI kural (`channelNameError`), ama burada anında geri bildirim
   // için. Güvenlik sınırı sunucudadır; bu yalnızca kolaylık.
@@ -44,9 +60,29 @@ export function ChannelCreateModal({ guildId, canCreateText, canCreateVoice, onC
     // Buton kasıtlı olarak pasif değil: tıklama, kısa adda uyarıyı ortaya
     // çıkaran şey. Engelleme burada.
     if (error !== null || busy) return;
+    if (restricted && selectedRoleIds.size === 0) return; // kimse göremeyen bir kanal anlamsız
     setBusy(true);
     try {
-      await api.post(`/guilds/${guildId}/channels`, { name: trimmed, type });
+      const channel = await api.post<APIChannel>(`/guilds/${guildId}/channels`, { name: trimmed, type });
+      if (restricted) {
+        const VIEW_CHANNEL = Permission.VIEW_CHANNEL.toString();
+        // @everyone'dan görünürlüğü düş, yalnızca seçili rollere geri ver —
+        // Rol Ayarları'ndaki "Görüntülenecek Kanallar" seçicisiyle AYNI uç.
+        await Promise.all([
+          api.put(`/channels/${channel.id}/permissions/${guildId}`, {
+            targetType: 'role',
+            allow: '0',
+            deny: VIEW_CHANNEL,
+          }),
+          ...[...selectedRoleIds].map((roleId) =>
+            api.put(`/channels/${channel.id}/permissions/${roleId}`, {
+              targetType: 'role',
+              allow: VIEW_CHANNEL,
+              deny: '0',
+            }),
+          ),
+        ]);
+      }
       onClose();
     } catch {
       setBusy(false);
@@ -136,10 +172,62 @@ export function ChannelCreateModal({ guildId, canCreateText, canCreateVoice, onC
             )}
           </label>
 
+          {pickableRoles.length > 0 && (
+            <div>
+              <label className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-muted)]">
+                  <Lock size={13} /> {t('channel.restrictVisibility')}
+                </span>
+                <input
+                  type="checkbox"
+                  checked={restricted}
+                  onChange={(e) => setRestricted(e.target.checked)}
+                  className="h-4 w-4 accent-[var(--color-brand)]"
+                />
+              </label>
+              {restricted && (
+                <div className="mt-2 max-h-40 space-y-0.5 overflow-y-auto rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] p-2">
+                  {pickableRoles.map((role) => (
+                    <label
+                      key={role.id}
+                      className="flex items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-[var(--color-surface-3)]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedRoleIds.has(role.id)}
+                        onChange={(e) =>
+                          setSelectedRoleIds((current) => {
+                            const next = new Set(current);
+                            if (e.target.checked) next.add(role.id);
+                            else next.delete(role.id);
+                            return next;
+                          })
+                        }
+                        className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
+                      />
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full border border-[var(--color-line)]"
+                        style={{
+                          background: role.color ? `#${role.color.toString(16).padStart(6, '0')}` : 'transparent',
+                        }}
+                      />
+                      <span className="truncate text-[var(--color-ink-muted)]">{role.name}</span>
+                    </label>
+                  ))}
+                  {selectedRoleIds.size === 0 && (
+                    <p className="px-1.5 pt-1 text-xs text-[var(--color-idle)]">
+                      {t('channel.restrictVisibilityEmpty')}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             type="button"
             onClick={() => void create()}
-            disabled={busy}
+            disabled={busy || (restricted && selectedRoleIds.size === 0)}
             className="w-full rounded bg-[var(--color-brand)] px-4 py-2 font-medium text-black transition hover:bg-[var(--color-brand-strong)] disabled:opacity-50"
           >
             {t('common.create')}
