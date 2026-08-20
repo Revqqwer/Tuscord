@@ -7,11 +7,21 @@
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { count, desc, eq, isNull, sum } from 'drizzle-orm';
+import { and, count, desc, eq, gte, isNotNull, isNull, ne, sql, sum } from 'drizzle-orm';
 import { z } from 'zod';
 import { GatewayEvent } from '@tuscord/shared';
 import { db } from '../db/index.js';
-import { attachments, guildMembers, guilds, memberRoles, messages, roles, users } from '../db/schema.js';
+import {
+  activeUserPeaks,
+  attachments,
+  guildMembers,
+  guilds,
+  memberRoles,
+  messages,
+  roles,
+  trafficLogs,
+  users,
+} from '../db/schema.js';
 import { Errors } from '../lib/errors.js';
 import { userId } from '../app.js';
 import { snowflakeParam } from '../lib/validate.js';
@@ -47,6 +57,72 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       dailyPeakActiveUsers: activeStats.dailyPeak,
       allTimePeakActiveUsers: activeStats.allTimePeak,
     });
+  });
+
+  /**
+   * Günlük seri: benzersiz aktif kullanıcı, yeni kayıt, en yüksek eşzamanlı
+   * kullanıcı — geçici raporlama sayfası için (bkz. web AdminStats.tsx).
+   * Üç ayrı GROUP BY sorgusu sonra JS'te tarihe göre birleştirme: tek
+   * sorguda JOIN etmek (users × traffic_logs × active_user_peaks) satır
+   * çarpımına yol açardı — guilds/admin.ts'teki aynı desen (bkz. yukarısı).
+   */
+  app.get('/admin/stats/daily', async (request, reply) => {
+    assertAdmin(request);
+    const query = z.object({ days: z.coerce.number().int().min(1).max(90).default(30) }).parse(request.query);
+
+    const since = new Date();
+    since.setUTCDate(since.getUTCDate() - (query.days - 1));
+    since.setUTCHours(0, 0, 0, 0);
+    const sinceDay = since.toISOString().slice(0, 10);
+
+    const [registrationRows, uniqueUserRows, peakRows] = await Promise.all([
+      db
+        .select({ day: sql<string>`date_trunc('day', ${users.createdAt})::date`, value: count() })
+        .from(users)
+        .where(gte(users.createdAt, since))
+        .groupBy(sql`1`),
+      db
+        .select({
+          day: sql<string>`date_trunc('day', ${trafficLogs.createdAt})::date`,
+          value: sql<number>`count(distinct ${trafficLogs.userId})`,
+        })
+        .from(trafficLogs)
+        .where(
+          and(
+            gte(trafficLogs.createdAt, since),
+            isNotNull(trafficLogs.userId),
+            ne(trafficLogs.eventType, 'login_failed'),
+          ),
+        )
+        .groupBy(sql`1`),
+      db
+        .select({ day: activeUserPeaks.day, value: activeUserPeaks.peak })
+        .from(activeUserPeaks)
+        .where(gte(activeUserPeaks.day, sinceDay)),
+    ]);
+
+    const toMap = (rows: { day: string; value: number | string }[]) =>
+      new Map(rows.map((r) => [new Date(r.day).toISOString().slice(0, 10), Number(r.value)]));
+    const registrations = toMap(registrationRows);
+    const uniqueUsers = toMap(uniqueUserRows);
+    const peaks = toMap(peakRows);
+
+    // Veri olmayan günler de 0 ile serimizde yer alsın — çizgi grafik
+    // aralarında atlama yapmasın (bkz. AdminStats.tsx).
+    const series: { date: string; uniqueUsers: number; newRegistrations: number; peakConcurrent: number }[] = [];
+    for (let i = 0; i < query.days; i++) {
+      const day = new Date(since);
+      day.setUTCDate(day.getUTCDate() + i);
+      const key = day.toISOString().slice(0, 10);
+      series.push({
+        date: key,
+        uniqueUsers: uniqueUsers.get(key) ?? 0,
+        newRegistrations: registrations.get(key) ?? 0,
+        peakConcurrent: peaks.get(key) ?? 0,
+      });
+    }
+
+    return reply.send(series);
   });
 
   /** Tüm kullanıcılar (sayfalı). */

@@ -13,6 +13,7 @@ import {
   Server,
   ShieldCheck,
   Trash2,
+  TrendingUp,
   Trophy,
   Users as UsersIcon,
   X,
@@ -161,7 +162,14 @@ export function AdminPanel({ onClose }: Props) {
         <header className="flex items-center gap-2 border-b border-[var(--color-line)] px-4 py-3">
           <ShieldCheck size={18} className="text-[var(--color-brand)]" />
           <h2 className="font-medium">{t('admin.title')}</h2>
-          <button type="button" onClick={onClose} aria-label={t('common.close')} className="ml-auto text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]">
+          <a
+            href="/admin/rapor"
+            title={t('adminStats.title')}
+            className="ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
+          >
+            <TrendingUp size={14} /> {t('adminStats.title')}
+          </a>
+          <button type="button" onClick={onClose} aria-label={t('common.close')} className="text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]">
             <X size={18} />
           </button>
         </header>
