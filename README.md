@@ -23,7 +23,7 @@ kanal izin overwrite ekranı · platform admin · **sesli kanallar** (mesh P2P) 
 | Domain | **tuscord.com** (GoDaddy → Cloudflare nameserver) |
 | Barındırma (şimdilik) | Ev makinesi + **Cloudflare Tunnel** (genel IP/açık port gerektirmez, ücretsiz). Ölçeklenince TR VPS'e taşınır. |
 | Ses/ekran taşıma | **Mesh P2P WebRTC** — medya sunucusu YOK. Sinyalleşme gateway üzerinden, NAT geçişi public STUN. LiveKit değil: ev+tunnel altyapısında LiveKit medyası çalışmaz. |
-| E-posta | **Brevo** SMTP (Gmail'den taşındı, spam çözüldü; DMARC p=reject) |
+| E-posta | **Amazon SES** SMTP (Gmail → Brevo → SES; DMARC p=reject) |
 | Trafik kaydı saklama | 365 gün, otomatik silme (`TRAFFIC_LOG_RETENTION_DAYS`) |
 | Ana renk | `#14b8a6` turkuaz — Discord'un `#5865F2`'sinden belirgin farklı |
 
@@ -242,11 +242,16 @@ etkinlik, sahne kanalı, webcam video. Ses tarafında **cihaz seçimi
 (mikrofon/hoparlör), bas-konuş (PTT) ve giriş hassasiyeti** henüz yok — mesh
 gerçek ağlarda doğrulandıktan sonra eklenecek cilalar.
 
-**E-posta** (`services/mail.ts`) — Brevo SMTP nodemailer ile bağlı. `.env`'e
-`SMTP_HOST=smtp-relay.brevo.com` + SMTP anahtarları girilince doğrulama ve
-parola sıfırlama gerçekten gönderilir; boş bırakılırsa geliştirmede konsola
-yazılır. Açılışta bağlantı doğrulanıp loglanır. Gönderen alan adı Brevo'da
-doğrulanmış olmalı ve SPF/DKIM/DMARC kaydı tamamlanmalı, yoksa spam'e düşer.
+**E-posta** (`services/mail.ts`) — Amazon SES SMTP nodemailer ile bağlı
+(Brevo'dan taşındı). `.env`'e `SMTP_HOST=email-smtp.<bölge>.amazonaws.com` +
+SES SMTP kimlik bilgileri girilince doğrulama ve parola sıfırlama gerçekten
+gönderilir; boş bırakılırsa geliştirmede konsola yazılır. Açılışta bağlantı
+doğrulanıp loglanır. Gönderen alan adı SES'te doğrulanmış olmalı ve
+SPF/DKIM/DMARC kaydı tamamlanmalı, yoksa spam'e düşer ya da reddedilir.
+Hesap SES "sandbox" modundaysa yalnızca önceden doğrulanmış alıcılara
+gönderim yapılır — üretime çıkmadan AWS konsolundan "production access"
+istenmeli. İki e-posta da kısa, logolu bir HTML şablonuyla gönderiliyor
+(`emailShell()`), düz metin sürümü de her zaman eşlik ediyor.
 
 **Görsel / CSAM taraması** (`services/imageScanner.ts` + `contentScan.ts`) —
 tarayıcı takılıp çıkarılabilir. Karar mantığı `imageScanner`'a devredilmiş,

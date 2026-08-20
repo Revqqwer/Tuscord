@@ -3,8 +3,8 @@
  *
  * Biçim doğrulaması (zod `.email()`) `gmial.com` gibi yazım hatalarını
  * yakalayamaz: biçim geçerlidir ama adres teslim edilemez. Doğrulama maili
- * boşluğa gider, kullanıcı hesabını hiç açamaz ve Brevo tarafında sert geri
- * dönüş (hard bounce) birikir — bu da gönderen itibarımızı düşürür.
+ * boşluğa gider, kullanıcı hesabını hiç açamaz ve sağlayıcı tarafında sert
+ * geri dönüş (hard bounce) birikir — bu da gönderen itibarımızı düşürür.
  *
  * Politika:
  *  - MX kaydı varsa geçerli.
