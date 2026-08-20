@@ -69,6 +69,8 @@ export interface CreateSessionInput {
   userId: bigint;
   ip?: string | null;
   userAgent?: string | null;
+  /** Verilmezse env.SESSION_TTL_DAYS kullanılır — "beni oturumda tut" bunu ezer. */
+  ttlDays?: number;
 }
 
 /**
@@ -89,7 +91,8 @@ export async function createSession(
   const token = generateToken();
   const tokenHash = hashToken(token);
   const sessionId = nextId();
-  const expiresAt = new Date(Date.now() + env.SESSION_TTL_DAYS * 86_400_000);
+  const ttlDays = input.ttlDays ?? env.SESSION_TTL_DAYS;
+  const expiresAt = new Date(Date.now() + ttlDays * 86_400_000);
 
   await db.insert(sessions).values({
     id: sessionId,
@@ -105,12 +108,7 @@ export async function createSession(
     userId: input.userId.toString(),
     expiresAt: expiresAt.getTime(),
   };
-  await redis.set(
-    RedisKeys.session(tokenHash),
-    JSON.stringify(cached),
-    'EX',
-    env.SESSION_TTL_DAYS * 86_400,
-  );
+  await redis.set(RedisKeys.session(tokenHash), JSON.stringify(cached), 'EX', ttlDays * 86_400);
 
   await publishToUsers([input.userId.toString()], {
     event: GatewayEvent.SESSION_INVALIDATED,

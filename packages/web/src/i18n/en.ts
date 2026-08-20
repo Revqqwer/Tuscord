@@ -27,6 +27,7 @@ export const en = {
     needAccount: "Don't have an account? Sign up",
     haveAccount: 'Already have an account? Log in',
     forgotPassword: 'Forgot password',
+    rememberMe: 'Stay signed in',
     showPassword: 'Show password',
     hidePassword: 'Hide password',
     sessionInvalidated: 'You were logged out because you signed in elsewhere (browser or desktop app).',

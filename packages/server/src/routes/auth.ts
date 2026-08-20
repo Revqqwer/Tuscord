@@ -51,7 +51,12 @@ const registerBody = z.object({
 const loginBody = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(1).max(Limits.PASSWORD_MAX),
+  /** "Beni oturumda tut" — işaretliyse oturum ~1 yıl sürer, aksi hâlde SESSION_TTL_DAYS. */
+  remember: z.boolean().optional().default(false),
 });
+
+/** "Beni oturumda tut" seçiliyken kullanılan oturum süresi — pratikte "çıkış yapana kadar". */
+const REMEMBER_ME_TTL_DAYS = 365;
 
 function hashVerificationToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -192,6 +197,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       userId: user.id,
       ip,
       userAgent: request.headers['user-agent'] ?? null,
+      ttlDays: body.remember ? REMEMBER_ME_TTL_DAYS : undefined,
     });
     await logTraffic({
       userId: user.id,

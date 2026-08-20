@@ -27,6 +27,7 @@ export const tr = {
     needAccount: 'Hesabın yok mu? Kaydol',
     haveAccount: 'Zaten hesabın var mı? Giriş yap',
     forgotPassword: 'Parolamı unuttum',
+    rememberMe: 'Beni oturumda tut',
     showPassword: 'Parolayı göster',
     hidePassword: 'Parolayı gizle',
     sessionInvalidated: 'Başka bir yerden (tarayıcı veya masaüstü uygulaması) giriş yapıldığı için oturumun kapatıldı.',
