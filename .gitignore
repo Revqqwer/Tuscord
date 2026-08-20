@@ -1,6 +1,10 @@
 node_modules/
 dist/
 build/
+# Masaüstü uygulaması ikonu üretilen bir ikili — script kalsın, .ico kalmasın.
+!packages/desktop/build/
+packages/desktop/build/*
+!packages/desktop/build/generate-icon.mjs
 .env
 .env.*
 !.env.example

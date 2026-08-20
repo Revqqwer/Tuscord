@@ -164,9 +164,22 @@ function openScreenPicker(parentWin) {
   });
 }
 
+/**
+ * PC açılışında otomatik başlat (bkz. kullanıcı isteği). Yalnızca paketlenmiş
+ * (kurulum yapılmış) uygulamada anlamlı — `electron .` ile geliştirme
+ * modunda çalıştırıldığında Windows'un başlangıç kaydına node.exe/electron.exe
+ * yazılırdı, bu da kurulu olmayan bir yolu başlatmaya çalışırdı.
+ * `app.isPackaged` bu ayrımı yapıyor.
+ */
+function enableAutoLaunch() {
+  if (!app.isPackaged) return;
+  app.setLoginItemSettings({ openAtLogin: true, openAsHidden: false });
+}
+
 app.whenReady().then(() => {
   app.setAppUserModelId('com.tuscord.desktop');
   Menu.setApplicationMenu(null);
+  enableAutoLaunch();
   createWindow();
 
   app.on('activate', () => {

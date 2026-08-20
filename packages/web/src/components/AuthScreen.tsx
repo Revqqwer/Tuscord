@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
 import { Limits, USERNAME_PATTERN, isValidEmail, type SelfUser } from '@tuscord/shared';
 import { ApiError, api } from '../lib/api';
+import { isDesktopApp } from '../lib/platform';
 import { LegalFooter } from './LegalFooter';
 import { WalrusLoader } from './WalrusLoader';
 
@@ -44,6 +45,10 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  // Masaüstü uygulamasında varsayılan işaretli — açılışta şifre sormadan
+  // girmek zaten beklenen davranış (bkz. kullanıcı isteği: "logout olana
+  // kadar tekrar şifre sormasın").
+  const [remember, setRemember] = useState(() => isDesktopApp());
 
   /** Gönderimden önceki istemci kontrolü — sunucuya gitmeden alanda uyar. */
   function validate(): FieldErrors {
@@ -132,7 +137,8 @@ export function AuthScreen({ onAuthenticated }: Props) {
         return;
       }
       const path = mode === 'login' ? '/auth/login' : '/auth/register';
-      const body = mode === 'login' ? { email, password } : { email, password, username };
+      const body =
+        mode === 'login' ? { email, password, remember } : { email, password, username };
       const result = await api.post<{ user: SelfUser }>(path, body);
       onAuthenticated(result.user);
     } catch (caught) {
@@ -226,17 +232,28 @@ export function AuthScreen({ onAuthenticated }: Props) {
             )}
 
             {mode === 'login' && (
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('forgot');
-                  setFieldErrors({});
-                  setFormError(null);
-                }}
-                className="-mt-2 mb-4 block text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-              >
-                {t('auth.forgotPassword')}
-              </button>
+              <div className="-mt-2 mb-4 flex items-center justify-between gap-2">
+                <label className="flex items-center gap-1.5 text-sm text-[var(--color-ink-muted)]">
+                  <input
+                    type="checkbox"
+                    checked={remember}
+                    onChange={(event) => setRemember(event.target.checked)}
+                    className="h-4 w-4 rounded border-[var(--color-line)] accent-[var(--color-brand)]"
+                  />
+                  {t('auth.rememberMe')}
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('forgot');
+                    setFieldErrors({});
+                    setFormError(null);
+                  }}
+                  className="text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                >
+                  {t('auth.forgotPassword')}
+                </button>
+              </div>
             )}
 
             {formError && (
