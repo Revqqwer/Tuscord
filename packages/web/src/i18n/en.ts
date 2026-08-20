@@ -161,6 +161,7 @@ export const en = {
     replyingTo: 'Replying to {{name}}',
     cancelReply: 'Cancel reply',
     jumpToReply: 'Jump to replied message',
+    doubleClickReply: 'Double-click to reply',
     reportPrompt: 'Why are you reporting this message?',
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',

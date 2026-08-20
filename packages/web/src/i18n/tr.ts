@@ -161,6 +161,7 @@ export const tr = {
     replyingTo: '{{name}} kullanıcısına yanıt veriliyor',
     cancelReply: 'Yanıtı iptal et',
     jumpToReply: 'Yanıtlanan mesaja git',
+    doubleClickReply: 'Yanıtlamak için çift tıkla',
     reportPrompt: 'Bu mesajı neden bildiriyorsun?',
     zoomIn: 'Yakınlaştır',
     zoomOut: 'Uzaklaştır',
