@@ -195,7 +195,16 @@ export function MessageRow({
             <div className="mt-1 text-xs text-[var(--color-ink-faint)]">{t('message.editHint')}</div>
           </div>
         ) : (
-          <div className="whitespace-pre-wrap break-words text-[var(--color-ink)]">
+          <div
+            onDoubleClick={() => {
+              // Çift tık kelime seçer; yanıt kutusuna odaklanınca görünmez
+              // kalır ama yine de temizleyelim ki ekranda asılı kalmasın.
+              window.getSelection()?.removeAllRanges();
+              onReply();
+            }}
+            className="cursor-pointer whitespace-pre-wrap break-words text-[var(--color-ink)]"
+            title={t('message.doubleClickReply')}
+          >
             <MessageContent
               content={message.content}
               userNames={userNames}
