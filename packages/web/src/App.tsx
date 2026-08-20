@@ -4,6 +4,7 @@ import type { SelfUser } from '@tuscord/shared';
 import { api } from './lib/api';
 import { useStore } from './store';
 import { useGateway } from './hooks/useGateway';
+import { AdminStats } from './components/AdminStats';
 import { AuthScreen } from './components/AuthScreen';
 import { BotInviteScreen } from './components/BotInviteScreen';
 import { ChatShell } from './components/ChatShell';
@@ -63,6 +64,15 @@ function resetTokenFromUrl(): string | null {
  * olarak burada anonim önizleme yok, doğrudan giriş isteniyor (bkz. render'daki
  * showAuth dallanması).
  */
+/**
+ * Geçici admin raporlama sayfası (bkz. AdminStats.tsx). Erişim sınırı asıl
+ * olarak sunucudadır (`/admin/stats/daily` isAdmin değilse 404 döner);
+ * burada yalnızca yol eşleşmesine bakılır, yetki kontrolü render sırasında.
+ */
+function wantsAdminStats(): boolean {
+  return /^\/admin\/rapor\/?$/.test(location.pathname);
+}
+
 function botInviteFromUrl(): { applicationId: string; permissions: bigint } | null {
   const match = /^\/bot-ekle\/(\d+)\/?$/.exec(location.pathname);
   const applicationId = match?.[1];
@@ -87,6 +97,7 @@ export function App() {
   const [inviteWantsAuth, setInviteWantsAuth] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(() => resetTokenFromUrl());
   const [botInvite, setBotInvite] = useState(() => botInviteFromUrl());
+  const [showAdminStats, setShowAdminStats] = useState(() => wantsAdminStats());
   /**
    * Masaüstü uygulamasında açılış sayfası hiç gösterilmez — orada zaten
    * içindesin, "Windows için indir" sunmak anlamsız (bkz. kullanıcı raporu).
@@ -110,6 +121,7 @@ export function App() {
       setInviteToken(inviteTokenFromPath());
       setResetToken(resetTokenFromUrl());
       setBotInvite(botInviteFromUrl());
+      setShowAdminStats(wantsAdminStats());
       setShowAuth(wantsAuthScreen() || isDesktopApp());
     };
     window.addEventListener('popstate', onPopState);
@@ -173,6 +185,25 @@ export function App() {
           history.pushState({}, '', '/');
           setBotInvite(null);
           useStore.getState().setPendingActiveGuild(guildId);
+        }}
+      />
+    );
+  }
+
+  if (showAdminStats) {
+    if (!user) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+    // Admin değilse sayfanın varlığını belli etmeden ana uygulamaya düş —
+    // sunucu tarafındaki admin uçlarıyla AYNI ilke (bkz. routes/admin.ts:
+    // "admin uçlarının varlığı sıradan kullanıcıya sızmasın").
+    if (!user.isAdmin) {
+      history.replaceState({}, '', '/');
+      return <ChatShell />;
+    }
+    return (
+      <AdminStats
+        onBack={() => {
+          history.pushState({}, '', '/');
+          setShowAdminStats(false);
         }}
       />
     );
