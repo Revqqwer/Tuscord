@@ -147,7 +147,22 @@ export function MessageRow({
         )}
       </div>
 
-      <div className="min-w-0 flex-1">
+      <div
+        className="min-w-0 flex-1 cursor-pointer"
+        title={t('message.doubleClickReply')}
+        onDoubleClick={(event) => {
+          // Düzenleme kutusunda çift tık kelime seçmek için — yanıta geçmesin.
+          if (editing) return;
+          // Kendi tıklama anlamı olan öğeler (profil, tepki, ek dosya,
+          // "mesaja git", tam ekran önizleme) bu davranışı devralmasın —
+          // yalnızca boş alan ve düz metin çift tıkla yanıtlasın.
+          if (event.target instanceof HTMLElement && event.target.closest('button, a, textarea')) return;
+          // Çift tık kelime seçer; yanıt kutusuna odaklanınca görünmez
+          // kalır ama yine de temizleyelim ki ekranda asılı kalmasın.
+          window.getSelection()?.removeAllRanges();
+          onReply();
+        }}
+      >
         {replyTarget && (
           <button
             type="button"
@@ -195,16 +210,7 @@ export function MessageRow({
             <div className="mt-1 text-xs text-[var(--color-ink-faint)]">{t('message.editHint')}</div>
           </div>
         ) : (
-          <div
-            onDoubleClick={() => {
-              // Çift tık kelime seçer; yanıt kutusuna odaklanınca görünmez
-              // kalır ama yine de temizleyelim ki ekranda asılı kalmasın.
-              window.getSelection()?.removeAllRanges();
-              onReply();
-            }}
-            className="cursor-pointer whitespace-pre-wrap break-words text-[var(--color-ink)]"
-            title={t('message.doubleClickReply')}
-          >
+          <div className="whitespace-pre-wrap break-words text-[var(--color-ink)]">
             <MessageContent
               content={message.content}
               userNames={userNames}
