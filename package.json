@@ -6,7 +6,8 @@
   "workspaces": [
     "packages/shared",
     "packages/server",
-    "packages/web"
+    "packages/web",
+    "packages/desktop"
   ],
   "engines": {
     "node": ">=22"

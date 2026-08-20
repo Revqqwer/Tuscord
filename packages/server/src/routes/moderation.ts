@@ -208,6 +208,41 @@ export async function moderationRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
+  /* ---------------- Sesli kanaldan çıkar (force disconnect) ---------------- */
+
+  /**
+   * Bir kullanıcıyı bulunduğu sesli kanaldan TAMAMEN çıkarır — voice-move'un
+   * aksine hedef kanal yok, sadece kanaldan atılır. Sağ tık menüsünde
+   * "Kanaldan çıkar" olarak sunulur (bkz. VoiceChannel.tsx userMenuItems),
+   * DISCONNECT_MEMBERS izniyle ayrı bir yetki — MOVE_MEMBERS'a bağlı değil,
+   * bir sunucu birini taşıyabilsin ama atamasın (ya da tersi) diye.
+   */
+  app.put('/guilds/:guildId/members/:memberId/voice-disconnect', async (request, reply) => {
+    const me = userId(request);
+    const guildId = snowflakeParam(request.params, 'guildId');
+    const memberId = snowflakeParam(request.params, 'memberId');
+
+    const access = await requireGuildAccess(guildId, me);
+    assertPermission(access.permissions, Permission.DISCONNECT_MEMBERS);
+
+    await writeAuditLog({
+      guildId,
+      actorId: me,
+      actionType: 'member_voice_disconnect',
+      targetId: memberId,
+    });
+
+    // Aynı desende: yalnızca hedef kullanıcıya — gateway forceDisconnectVoice
+    // izin kontrolünü bilerek atlar (bkz. voice-move yorumu).
+    await publishToUsers([memberId.toString()], {
+      guildId: guildId.toString(),
+      event: GatewayEvent.VOICE_FORCE_DISCONNECT,
+      payload: { guildId: guildId.toString(), userId: memberId.toString() },
+    });
+
+    return reply.status(204).send();
+  });
+
   /* ---------------- Kick (at) ---------------- */
 
   app.delete('/guilds/:guildId/members/:memberId', async (request, reply) => {

@@ -18,8 +18,8 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowRightLeft,
   Headphones,
+  Keyboard,
   Lock,
-  MessageSquare,
   Mic,
   MicOff,
   MonitorUp,
@@ -65,6 +65,7 @@ export function VoiceChannelItem({
   channel,
   canServerMute,
   canMoveMembers,
+  canDisconnectMembers,
   voiceChannels,
   menu,
   onOpenMenu,
@@ -77,6 +78,8 @@ export function VoiceChannelItem({
   canServerMute: boolean;
   /** MOVE_MEMBERS iznim var mı — "Taşı: <kanal>" seçenekleri buna bağlı. */
   canMoveMembers: boolean;
+  /** DISCONNECT_MEMBERS iznim var mı — "Kanaldan çıkar" seçeneği buna bağlı. */
+  canDisconnectMembers: boolean;
   /** Sunucudaki TÜM sesli kanallar — taşıma hedefi listesi burada bunlardan çıkarılır. */
   voiceChannels: APIChannel[];
   /** Şu an açık olan menü BU kanala aitse dolu, değilse null (bkz. VoiceMenuState yorumu). */
@@ -95,6 +98,7 @@ export function VoiceChannelItem({
 }) {
   const { t } = useTranslation();
   const voiceChannelId = useStore((s) => s.voiceChannelId);
+  const setActive = useStore((s) => s.setActive);
   const roster = useStore((s) => s.voiceStates.get(channel.id));
   const speaking = useStore((s) => s.voiceSpeaking);
   const selfMuteGlobal = useStore((s) => s.selfMute);
@@ -151,6 +155,16 @@ export function VoiceChannelItem({
                 }),
               )
           : []),
+        ...(canDisconnectMembers
+          ? [
+              {
+                label: t('voice.disconnectMember'),
+                icon: <PhoneOff size={15} />,
+                danger: true,
+                onClick: () => void disconnectMember(menuParticipant.user.id),
+              } satisfies MenuItem,
+            ]
+          : []),
         {
           label: menuIsBlocked ? t('profile.unblock') : t('profile.block'),
           icon: <UserX size={15} />,
@@ -166,6 +180,11 @@ export function VoiceChannelItem({
 
   async function join() {
     onNavigate();
+    // Discord'daki gibi: sesli kanala tıklamak hem bağlanır (veya zaten
+    // bağlıysa yalnızca) HEM DE ortadaki alanı o kanalın katılımcı
+    // ızgarasına çevirir (bkz. ChatShell.tsx — activeChannelId sesli kanala
+    // eşitse VoiceCallView gösteriliyor).
+    if (channel.guildId) setActive(channel.guildId, channel.id);
     if (connectedHere) return;
     try {
       await voice.join(channel.id);
@@ -183,6 +202,12 @@ export function VoiceChannelItem({
   async function moveMember(userId: string, targetChannelId: string) {
     await api
       .put(`/guilds/${channel.guildId}/members/${userId}/voice-move`, { channelId: targetChannelId })
+      .catch(() => undefined); // 403/hiyerarşi hatası — sessizce geç, buton zaten izne göre gizli
+  }
+
+  async function disconnectMember(userId: string) {
+    await api
+      .put(`/guilds/${channel.guildId}/members/${userId}/voice-disconnect`)
       .catch(() => undefined); // 403/hiyerarşi hatası — sessizce geç, buton zaten izne göre gizli
   }
 
@@ -216,14 +241,18 @@ export function VoiceChannelItem({
         // menüsünü açar, buraya hiç düşmez.
         onOpenMenu({ kind: 'channel', x: e.clientX, y: e.clientY });
       }}
+      // Vurgu (hover) TÜM kanal elementini (isim satırı + katılımcı listesi)
+      // kaplasın diye burada, dıştaki sarmalayıcıda — metin kanalındaki gibi
+      // tek parça bir "tıklanabilir kart" hissi (bkz. kullanıcı raporu).
+      // İçteki buton kendi arka planını YÖNETMEZ artık, yalnızca metin/ikon
+      // rengini.
+      className="cursor-pointer rounded transition-colors hover:bg-[var(--color-surface-2)]"
     >
       <button
         type="button"
         onClick={() => void join()}
-        className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-base ${
-          connectedHere
-            ? 'text-[var(--color-ink)]'
-            : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]'
+        className={`flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-base ${
+          connectedHere ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
         }`}
       >
         {/* Sesli kanal sticker'ı: elle seçilmişse `channel.sticker`, yoksa kanal
@@ -348,8 +377,7 @@ export function VoiceControlBar() {
   const selfMute = useStore((s) => s.selfMute);
   const selfDeaf = useStore((s) => s.selfDeaf);
   const selfSharing = useStore((s) => s.selfSharing);
-  const voiceChatOpen = useStore((s) => s.voiceChatOpen);
-  const setVoiceChatOpen = useStore((s) => s.setVoiceChatOpen);
+  const pushToTalk = useStore((s) => s.pushToTalk);
   const guilds = useStore((s) => s.guilds);
   const myId = useStore((s) => s.user?.id);
   const serverMutedUserIds = useStore((s) => s.serverMutedUserIds);
@@ -425,18 +453,19 @@ export function VoiceControlBar() {
           {selfDeaf ? <VolumeX size={16} /> : <Headphones size={16} />}
         </ControlButton>
         <ControlButton
+          active={pushToTalk}
+          activeTone="online"
+          label={pushToTalk ? t('voice.pushToTalkOff') : t('voice.pushToTalkOn')}
+          onClick={() => voice.setPushToTalk(!pushToTalk)}
+        >
+          <Keyboard size={16} />
+        </ControlButton>
+        <ControlButton
           active={selfSharing}
           label={selfSharing ? t('voice.stopShare') : t('voice.share')}
           onClick={() => (selfSharing ? voice.stopScreenShare() : void voice.startScreenShare())}
         >
           {selfSharing ? <MonitorX size={16} /> : <MonitorUp size={16} />}
-        </ControlButton>
-        <ControlButton
-          active={voiceChatOpen}
-          label={voiceChatOpen ? t('voice.hideChat') : t('voice.chat')}
-          onClick={() => setVoiceChatOpen(!voiceChatOpen)}
-        >
-          <MessageSquare size={16} />
         </ControlButton>
         <button
           type="button"
@@ -458,12 +487,19 @@ function ControlButton({
   label,
   onClick,
   children,
+  activeTone = 'danger',
 }: {
   active: boolean;
   disabled?: boolean;
   label: string;
   onClick: () => void;
   children: React.ReactNode;
+  /**
+   * Aktifken renk — varsayılan kırmızı (mute/deafen/paylaşım için "dikkat"
+   * anlamında uygun). Bas-konuş için YEŞİL istendi (bkz. kullanıcı raporu:
+   * "tuşu yeşil olsun kırmızı olmasın") — o, bir uyarı değil "hazır" durumu.
+   */
+  activeTone?: 'danger' | 'online';
 }) {
   return (
     <button
@@ -474,7 +510,9 @@ function ControlButton({
       aria-label={label}
       className={`flex flex-1 items-center justify-center rounded px-2 py-1.5 transition disabled:cursor-not-allowed disabled:opacity-60 ${
         active
-          ? 'bg-[var(--color-danger)]/15 text-[var(--color-danger)]'
+          ? activeTone === 'online'
+            ? 'bg-[var(--color-online)]/15 text-[var(--color-online)]'
+            : 'bg-[var(--color-danger)]/15 text-[var(--color-danger)]'
           : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]'
       }`}
     >

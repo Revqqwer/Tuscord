@@ -38,6 +38,7 @@ import {
   visibleChannels,
 } from '../services/permissions.js';
 import { publishToGuild, publishToUsers } from '../services/events.js';
+import { deleteGuildAttachmentFiles } from '../services/guildCleanup.js';
 import { buildReadyGuild } from '../services/readyGuild.js';
 import { refreshChannelVisibility } from '../services/channelVisibility.js';
 import { joinGuild } from '../services/joinGuild.js';
@@ -418,6 +419,9 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
       .from(guildMembers)
       .where(eq(guildMembers.guildId, guildId));
 
+    // Asıl dosyalar guild satırı silinmeden ÖNCE — CASCADE attachments
+    // satırlarını da götürüyor, o zaman objectKey'lere erişilemez.
+    await deleteGuildAttachmentFiles(guildId);
     await db.delete(guilds).where(eq(guilds.id, guildId));
 
     await publishToUsers(

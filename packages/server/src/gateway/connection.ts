@@ -19,6 +19,7 @@ import {
   type PermissionBits,
 } from '@tuscord/shared';
 import { loadChannelOverwrites, loadGuildContext, loadMember, type GuildContext } from '../services/permissions.js';
+import { isInVoiceChannel } from '../services/voicePresence.js';
 import type { MemberLike } from '@tuscord/shared';
 
 export interface BufferedEvent {
@@ -101,7 +102,12 @@ export class Connection {
 
   async canView(guildId: string, channelId: string, required?: PermissionBits): Promise<boolean> {
     const permissions = await this.permissionsIn(guildId, channelId);
-    if (!has(permissions, Permission.VIEW_CHANNEL)) return false;
+    const viewable =
+      has(permissions, Permission.VIEW_CHANNEL) || isInVoiceChannel(this.userId, channelId);
+    if (!viewable) return false;
+    // `required` (ör. mesaj göndermek için SEND_MESSAGES) fiziksel bulunuşla
+    // baypas EDİLMEZ — yalnızca GÖRME (bkz. voicePresence.ts, kullanıcı
+    // isteği: zorla taşınmış biri sohbeti görsün, yazma izni ayrı konu).
     if (required && !has(permissions, required)) return false;
     return true;
   }

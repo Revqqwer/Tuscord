@@ -120,6 +120,26 @@ export const GatewayEvent = {
    * kapatıp yeni kanalda yeniden kurar (bkz. voice.ts applyServerMove).
    */
   VOICE_FORCE_MOVE: 'VOICE_FORCE_MOVE',
+  /**
+   * Ses: bir moderatör DISCONNECT_MEMBERS izniyle birini bulunduğu sesli
+   * kanaldan tamamen çıkardı (hedef kanal YOK — VOICE_FORCE_MOVE'un aksine).
+   * Yalnızca hedef kullanıcıya gider; istemci mesh'i kapatıp kanaldan ayrılır
+   * (bkz. voice.ts applyServerDisconnect).
+   */
+  VOICE_FORCE_DISCONNECT: 'VOICE_FORCE_DISCONNECT',
+  /**
+   * Aynı anda yalnızca bir oturum: bu kullanıcı başka bir yerden (tarayıcı/
+   * masaüstü fark etmeksizin) giriş yaptı, önceki oturumlar sunucuda zaten
+   * silindi (bkz. auth/session.ts createSession) — istemci bunu alınca
+   * kendini oturumdan düşürür (bkz. useGateway.ts).
+   */
+  SESSION_INVALIDATED: 'SESSION_INVALIDATED',
+  /**
+   * Bir platform yöneticisi hesabımı yasakladı veya sildi — SESSION_INVALIDATED
+   * ile aynı "kendini düşür" mekanizması ama farklı bir sebeple, istemci
+   * ayrı bir mesaj gösterir (bkz. useGateway.ts, payload.reason).
+   */
+  FORCE_LOGOUT: 'FORCE_LOGOUT',
 } as const;
 export type GatewayEvent = (typeof GatewayEvent)[keyof typeof GatewayEvent];
 
@@ -144,6 +164,12 @@ export interface IdentifyPayload {
   token: string;
   /** İstemci bilgisi — oturum listesinde gösterilir. */
   properties?: { os?: string; browser?: string; device?: string };
+  /**
+   * Bağlanır bağlanmaz uygulanacak durum — verilmezse ONLINE. "Görünmez"
+   * (bkz. PresenceStatus.INVISIBLE) burada gönderilir ki sunucu bir an
+   * bile ONLINE yayınlamasın (bkz. server register()).
+   */
+  status?: PresenceStatus;
 }
 
 export interface ResumePayload {
@@ -170,6 +196,13 @@ export interface ReadState {
   lastReadMessageId: Snowflake | null;
   /** Okunmamış bahsetme sayısı. */
   mentionCount: number;
+  /**
+   * Toplam okunmamış mesaj sayısı (bahsetme dahil, hepsi) — READY'de sunucu
+   * tarafından hesaplanır (bkz. gateway/index.ts computeUnreadCounts),
+   * sonrasında istemci her MESSAGE_CREATE'te kendi artırır/ack'te sıfırlar
+   * (bkz. store/index.ts addMessage/markRead).
+   */
+  unreadCount: number;
 }
 
 /** READY tek pakette gelir — 300-1000 kullanıcı ölçeğinde parçalamaya (lazy GUILD_CREATE) gerek yok. */
@@ -311,10 +344,24 @@ export interface VoiceForceMovePayload {
   channelName: string;
 }
 
+/**
+ * Sunucu → istemci: bir moderatör DISCONNECT_MEMBERS izniyle bu kullanıcıyı
+ * bulunduğu sesli kanaldan tamamen çıkardı — hedef kanal yok, `channelName`
+ * de yok (VOICE_FORCE_MOVE'un aksine, geri dönülecek bir yer yok).
+ */
+export interface VoiceForceDisconnectPayload {
+  guildId: Snowflake;
+  userId: Snowflake;
+}
+
 export interface GuildDeletePayload {
   id: Snowflake;
   /** true ise kullanıcı çıkarıldı/ayrıldı; false ise sunucu silindi. */
   removed: boolean;
+}
+
+export interface ForceLogoutPayload {
+  reason: 'account_banned' | 'account_deleted';
 }
 
 /** Olay adı → yük tipi. İstemcideki olay yönlendiricisi bunu kullanır. */
@@ -352,6 +399,9 @@ export interface GatewayEventPayloadMap {
   [GatewayEvent.VOICE_SIGNAL]: VoiceSignalPayload;
   [GatewayEvent.VOICE_FORCE_MUTE]: VoiceForceMutePayload;
   [GatewayEvent.VOICE_FORCE_MOVE]: VoiceForceMovePayload;
+  [GatewayEvent.VOICE_FORCE_DISCONNECT]: VoiceForceDisconnectPayload;
+  [GatewayEvent.SESSION_INVALIDATED]: Record<string, never>;
+  [GatewayEvent.FORCE_LOGOUT]: ForceLogoutPayload;
 }
 
 export const GATEWAY_VERSION = 1;

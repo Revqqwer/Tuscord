@@ -35,10 +35,15 @@ import {
 import { db } from '../db/index.js';
 import { channels, guildMembers, guilds, readStates, users } from '../db/schema.js';
 import { toPublicUser } from '../services/serialize.js';
-import { SESSION_COOKIE, resolveSession } from '../auth/session.js';
+import { SESSION_COOKIE } from '../auth/session.js';
+import { resolveAnyToken } from '../auth/bot.js';
 import { redis, subscriber, PubSubChannels, RedisKeys } from '../redis.js';
 import { buildReadyGuild } from '../services/readyGuild.js';
 import { loadPrivateChannels } from '../services/privateChannels.js';
+import { computeUnreadCounts } from '../services/readState.js';
+import { clearVoicePresence, setVoicePresence } from '../services/voicePresence.js';
+import { markOffline, markOnline, onlineUserCount } from '../services/onlineUsers.js';
+import { recordActiveUserCount } from '../services/activeUserPeaks.js';
 import { toSelfUser } from '../services/serialize.js';
 import { Connection } from './connection.js';
 import type { EventEnvelope } from '../services/events.js';
@@ -155,7 +160,7 @@ export class Gateway {
             }
             identified = true;
             clearTimeout(identifyTimeout);
-            connection = await this.register(socket, session);
+            connection = await this.register(socket, session, payload?.status);
             break;
           }
 
@@ -207,7 +212,8 @@ export class Gateway {
             if (
               status === PresenceStatus.ONLINE ||
               status === PresenceStatus.IDLE ||
-              status === PresenceStatus.DND
+              status === PresenceStatus.DND ||
+              status === PresenceStatus.INVISIBLE
             ) {
               await this.setPresence(connection, status);
             }
@@ -245,16 +251,21 @@ export class Gateway {
     });
   }
 
-  /** Cookie öncelikli; tarayıcı dışı istemciler IDENTIFY içinde token gönderebilir. */
+  /**
+   * Cookie öncelikli; tarayıcı dışı istemciler IDENTIFY içinde token gönderir —
+   * botlar da tam olarak bunu yapar, kendi bot token'larını buradan geçirir
+   * (bkz. resolveAnyToken: önekine göre insan oturumu/bot token'ı ayrımı).
+   */
   private async authenticate(cookieHeader: string, token?: string) {
     const value = readCookie(cookieHeader, SESSION_COOKIE) ?? token;
     if (!value) return null;
-    return resolveSession(value);
+    return resolveAnyToken(value);
   }
 
   private async register(
     socket: import('ws').WebSocket,
-    session: NonNullable<Awaited<ReturnType<typeof resolveSession>>>,
+    session: NonNullable<Awaited<ReturnType<typeof resolveAnyToken>>>,
+    initialStatus?: string,
   ): Promise<Connection> {
     const sessionId = nextIdString();
     const connection = new Connection(socket, session.user.id.toString(), sessionId);
@@ -264,6 +275,12 @@ export class Gateway {
     userSessions.add(sessionId);
     this.userIndex.set(connection.userId, userSessions);
     await this.subscribeTo(PubSubChannels.user(connection.userId));
+
+    // Aktif kullanıcı sayacı — admin panelindeki "Genel bakış" için (bkz.
+    // services/onlineUsers.ts, activeUserPeaks.ts). Aynı kullanıcının 2.
+    // sekmesi sayıyı DEĞİŞTİRMEZ (Set), ama yine de kaydı tetiklemek zararsız.
+    markOnline(connection.userId);
+    void recordActiveUserCount(onlineUserCount());
 
     // Kullanıcının sunucuları ve ilk durum.
     const memberships = await db
@@ -292,20 +309,48 @@ export class Gateway {
 
     const privateChannels = await loadPrivateChannels(session.user.id);
 
+    const allChannelIds = [
+      ...readyGuilds.flatMap((g) => g.channels.map((c) => BigInt(c.id))),
+      ...privateChannels.map((c) => BigInt(c.id)),
+    ];
+    const unreadCounts = await computeUnreadCounts(session.user.id, allChannelIds);
+
+    // `readStates` yalnızca en az bir kez dokunulmuş (okundu işaretlenmiş
+    // ya da bahsedilmiş) kanalları kapsar — hiç açılmamış ama mesajı olan
+    // bir kanalın okunmamış sayısı bu yüzden ayrıca eklenir, yoksa istemciye
+    // hiç gitmez.
+    const readStateByChannel = new Map(readStateRows.map((row) => [row.channelId.toString(), row]));
+    const allReadStateChannelIds = new Set([...readStateByChannel.keys(), ...unreadCounts.keys()]);
+
     connection.dispatch(GatewayEvent.READY, {
       v: GATEWAY_VERSION,
       user: toSelfUser(session.user),
       sessionId,
       guilds: readyGuilds,
       privateChannels,
-      readStates: readStateRows.map((row) => ({
-        channelId: row.channelId.toString(),
-        lastReadMessageId: row.lastReadMessageId?.toString() ?? null,
-        mentionCount: row.mentionCount,
-      })),
+      readStates: [...allReadStateChannelIds].map((channelId) => {
+        const row = readStateByChannel.get(channelId);
+        return {
+          channelId,
+          lastReadMessageId: row?.lastReadMessageId?.toString() ?? null,
+          mentionCount: row?.mentionCount ?? 0,
+          unreadCount: unreadCounts.get(channelId) ?? 0,
+        };
+      }),
     });
 
-    await this.setPresence(connection, PresenceStatus.ONLINE);
+    // Geçerli bir durum gönderilmediyse (veya "invisible" YOKSA) varsayılan
+    // ONLINE — geçersiz bir değer sessizce ONLINE'a düşer, bağlantıyı reddetmez.
+    const validInitialStatuses: string[] = [
+      PresenceStatus.ONLINE,
+      PresenceStatus.IDLE,
+      PresenceStatus.DND,
+      PresenceStatus.INVISIBLE,
+    ];
+    await this.setPresence(
+      connection,
+      initialStatus && validInitialStatuses.includes(initialStatus) ? initialStatus : PresenceStatus.ONLINE,
+    );
     return connection;
   }
 
@@ -318,6 +363,7 @@ export class Gateway {
     userSessions?.delete(connection.sessionId);
     if (userSessions && userSessions.size === 0) {
       this.userIndex.delete(connection.userId);
+      markOffline(connection.userId);
       // Kullanıcının başka açık cihazı yoksa çevrimdışı.
       await redis.del(RedisKeys.presence(connection.userId));
       await this.broadcastPresence(connection.userId, PresenceStatus.OFFLINE);
@@ -332,9 +378,21 @@ export class Gateway {
     }
   }
 
+  /**
+   * "Görünmez" (bkz. PresenceStatus.INVISIBLE) Redis'e HİÇ yazılmaz — böylece
+   * `/guilds/:id/presences` ucu (bkz. routes/guilds.ts) onu zaten çevrimdışı
+   * biri gibi atlar, ayrı bir istisna kodu gerekmez. Diğerlerine her zaman
+   * gerçek ('offline'a çevrilmiş) durum yayınlanır — kullanıcı isteği: "başka
+   * kullanıcılar çevrimdışı görsün".
+   */
   private async setPresence(connection: Connection, status: string): Promise<void> {
-    await redis.set(RedisKeys.presence(connection.userId), status, 'EX', 300);
-    await this.broadcastPresence(connection.userId, status);
+    if (status === PresenceStatus.INVISIBLE) {
+      await redis.del(RedisKeys.presence(connection.userId));
+    } else {
+      await redis.set(RedisKeys.presence(connection.userId), status, 'EX', 300);
+    }
+    const publicStatus = status === PresenceStatus.INVISIBLE ? PresenceStatus.OFFLINE : status;
+    await this.broadcastPresence(connection.userId, publicStatus);
   }
 
   /** Durum değişikliği kullanıcının ortak olduğu tüm sunuculara gider. */
@@ -412,6 +470,7 @@ export class Gateway {
       user: toPublicUser(row),
     };
     this.voiceStates.set(userIdValue, state);
+    setVoicePresence(userIdValue, channelId);
 
     // Yeni katılana kanaldaki mevcut eşleri gönder — teklifi o başlatır.
     for (const other of this.voiceStates.values()) {
@@ -459,6 +518,7 @@ export class Gateway {
     const state = this.voiceStates.get(userIdValue);
     if (!state) return;
     this.voiceStates.delete(userIdValue);
+    clearVoicePresence(userIdValue);
     await this.broadcastVoiceState(state, true);
   }
 
@@ -497,6 +557,7 @@ export class Gateway {
       user: existing.user,
     };
     this.voiceStates.set(userIdValue, state);
+    setVoicePresence(userIdValue, channelId);
 
     // Yeni kanaldaki mevcut eşleri taşınan kullanıcıya gönder — teklifi o başlatır.
     for (const other of this.voiceStates.values()) {
@@ -610,6 +671,16 @@ export class Gateway {
       const payload = envelope.payload as { userId?: string; channelId?: string } | undefined;
       if (payload?.userId && payload.channelId) {
         await this.forceMoveVoice(payload.userId, payload.channelId);
+      }
+    }
+
+    // Zorla kanaldan çıkarma: hedefin istemcisine olay yukarıda zaten
+    // gönderildi — burada authoritative voiceStates kaydını da temizleyip
+    // diğer katılımcılara ayrıldığını yayınlıyoruz (bkz. leaveVoice).
+    if (envelope.event === GatewayEvent.VOICE_FORCE_DISCONNECT) {
+      const payload = envelope.payload as { userId?: string } | undefined;
+      if (payload?.userId) {
+        await this.leaveVoice(payload.userId);
       }
     }
 

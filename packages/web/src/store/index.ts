@@ -27,10 +27,24 @@ import type {
 import type { GatewayStatus } from '../lib/gateway';
 import {
   loadChannelVolumes,
+  loadInputDeviceId,
+  loadInputSensitivity,
   loadMutedPeerIds,
+  loadNoiseSuppression,
+  loadOutputDeviceId,
+  loadOutputVolume,
+  loadPushToTalk,
+  loadPushToTalkKey,
   loadUserVolumes,
   saveChannelVolumes,
+  saveInputDeviceId,
+  saveInputSensitivity,
   saveMutedPeerIds,
+  saveNoiseSuppression,
+  saveOutputDeviceId,
+  saveOutputVolume,
+  savePushToTalk,
+  savePushToTalkKey,
   saveUserVolumes,
 } from '../lib/voicePrefs';
 
@@ -63,7 +77,7 @@ interface AppState {
   /** kanal → yazan kullanıcılar ve son sinyal zamanı. */
   typing: Map<Snowflake, Map<Snowflake, number>>;
   /** kanal → okundu durumu. Kanal listesindeki rozetler buradan çizilir. */
-  readStates: Map<Snowflake, { lastReadMessageId: Snowflake | null; mentionCount: number }>;
+  readStates: Map<Snowflake, { lastReadMessageId: Snowflake | null; mentionCount: number; unreadCount: number }>;
   /** DM ve grup DM kanalları. */
   privateChannels: APIChannel[];
   /** true ise sunucu yerine DM görünümü açık. */
@@ -85,6 +99,22 @@ interface AppState {
   memberListVisible: boolean;
   /** 'all': çevrimdışılar da görünür. 'online': yalnızca çevrimiçiler. */
   memberListMode: 'all' | 'online';
+
+  /**
+   * Yeni mesaj/bahsetme sesi — varsayılan AÇIK, localStorage'da kalıcı.
+   * Kalabalık sunucularda ayrıca otomatik susturulur (bkz. useGateway.ts
+   * LARGE_GUILD_SOUND_THRESHOLD) — bu alan yalnızca kullanıcının kendi
+   * tercihi, otomatik davranışı geçersiz kılmaz.
+   */
+  messageSounds: boolean;
+
+  /**
+   * "Görünmez" tercih — açıkken sunucuya IDENTIFY/PRESENCE_UPDATE ile
+   * bildirilir, başkaları beni çevrimdışı görür (bkz. lib/gateway.ts
+   * setInvisible, server gateway/index.ts setPresence). localStorage'da
+   * kalıcı — bir sonraki bağlantıda da uygulanır.
+   */
+  invisible: boolean;
 
   /* ---- Ses (mesh P2P) ---- */
   /** Bağlı olduğum ses kanalı (yoksa null). */
@@ -124,6 +154,29 @@ interface AppState {
   /** Sessize aldığım kullanıcılar (kayan çubuğu 0'a çekmeden hızlı geçiş). */
   mutedPeerIds: Set<Snowflake>;
   /**
+   * Mikrofon algılama hassasiyeti: 0-100, düşük değer konuşma algısını daha
+   * KOLAY tetikler (bkz. voice.ts SPEAKING_THRESHOLD hesaplaması). Kullanıcı
+   * ayarlarından, canlı bir seviye göstergesiyle birlikte ayarlanır.
+   */
+  inputSensitivity: number;
+  /** Tüm gelen seslere uygulanan ANA çıktı seviyesi — kanal/kullanıcı seviyelerinin ÜSTÜNE çarpılır. */
+  outputVolume: number;
+  /** Varsayılan AÇIK; kullanıcı kendi ayarlarından kapatabilir (bkz. kullanıcı raporu). */
+  noiseSuppression: boolean;
+  /** Seçili mikrofon/hoparlör cihaz id'si (yoksa tarayıcı varsayılanı). */
+  inputDeviceId: string | null;
+  outputDeviceId: string | null;
+  /**
+   * Bas-konuş modu — açıkken mikrofon varsayılan olarak KAPALI, yalnızca
+   * `pushToTalkKey` basılıyken açılır (bkz. voice.ts). Varsayılan KAPALI
+   * (Discord'un "Ses Aktivasyonu" varsayılanıyla aynı) — kullanıcı açar.
+   */
+  pushToTalk: boolean;
+  /** `KeyboardEvent.code` değeri, ör. "ControlRight". */
+  pushToTalkKey: string;
+  /** Bas-konuş AÇIKKEN, tuş şu an basılı mı — UI'da "konuşuyor" rozetini besler. */
+  pushToTalkActive: boolean;
+  /**
    * Kaç tane modal/popout kanal sürükle-bırak sıralamasını kilitliyor.
    * Sayaç (boolean değil): UserSettings ve ProfilePopout aynı anda açılırsa
    * biri kapanınca diğeri hâlâ kilidi tutmaya devam etmeli. Native HTML5
@@ -145,6 +198,11 @@ interface AppState {
   setPendingActiveGuild: (guildId: Snowflake | null) => void;
   setMemberListVisible: (visible: boolean) => void;
   setMemberListMode: (mode: 'all' | 'online') => void;
+  setMessageSounds: (enabled: boolean) => void;
+  /** Saf state güncellemesi — gerçek zamanlı sunucu bildirimi için lib/gateway.ts setInvisible'ı kullan. */
+  setInvisible: (value: boolean) => void;
+  /** Bir kanaldaki okunmamış sayacını artırır (bkz. useGateway.ts MESSAGE_CREATE). */
+  bumpUnread: (channelId: Snowflake, mention: boolean) => void;
   setStatus: (status: GatewayStatus) => void;
   applyReady: (
     user: SelfUser,
@@ -165,6 +223,15 @@ interface AppState {
   setChannelVolume: (channelId: Snowflake, percent: number) => void;
   setUserVolume: (userId: Snowflake, percent: number) => void;
   setPeerMuted: (userId: Snowflake, muted: boolean) => void;
+  setInputSensitivity: (value: number) => void;
+  setOutputVolume: (value: number) => void;
+  setNoiseSuppression: (value: boolean) => void;
+  setInputDeviceId: (value: string | null) => void;
+  setOutputDeviceId: (value: string | null) => void;
+  setPushToTalk: (value: boolean) => void;
+  setPushToTalkKey: (value: string) => void;
+  /** Bas-konuş etkinken tuş anlık basılı mı — konuşma göstergesi/mikrofon buna göre. */
+  setPushToTalkActive: (active: boolean) => void;
   lockChannelDrag: () => void;
   unlockChannelDrag: () => void;
   setForcedVoiceChannelInfo: (info: { name: string; guildId: Snowflake } | null) => void;
@@ -263,6 +330,8 @@ export const useStore = create<AppState>((set) => ({
 
   memberListVisible: localStorage.getItem('tuscord.memberListVisible') !== 'false',
   memberListMode: localStorage.getItem('tuscord.memberListMode') === 'online' ? 'online' : 'all',
+  messageSounds: localStorage.getItem('tuscord.messageSounds') !== 'false',
+  invisible: localStorage.getItem('tuscord.invisible') === 'true',
 
   voiceChannelId: null,
   voiceConnecting: false,
@@ -277,6 +346,14 @@ export const useStore = create<AppState>((set) => ({
   channelVolumes: loadChannelVolumes(),
   userVolumes: loadUserVolumes(),
   mutedPeerIds: loadMutedPeerIds(),
+  inputSensitivity: loadInputSensitivity(),
+  outputVolume: loadOutputVolume(),
+  noiseSuppression: loadNoiseSuppression(),
+  inputDeviceId: loadInputDeviceId(),
+  outputDeviceId: loadOutputDeviceId(),
+  pushToTalk: loadPushToTalk(),
+  pushToTalkKey: loadPushToTalkKey(),
+  pushToTalkActive: false,
   channelDragLockCount: 0,
   forcedVoiceChannelInfo: null,
 
@@ -291,6 +368,32 @@ export const useStore = create<AppState>((set) => ({
     localStorage.setItem('tuscord.memberListMode', mode);
     set({ memberListMode: mode });
   },
+
+  setMessageSounds: (enabled) => {
+    localStorage.setItem('tuscord.messageSounds', String(enabled));
+    set({ messageSounds: enabled });
+  },
+
+  setInvisible: (value) => {
+    localStorage.setItem('tuscord.invisible', String(value));
+    set({ invisible: value });
+  },
+
+  bumpUnread: (channelId, mention) =>
+    set((state) => {
+      const readStates = new Map(state.readStates);
+      const current = readStates.get(channelId) ?? {
+        lastReadMessageId: null,
+        mentionCount: 0,
+        unreadCount: 0,
+      };
+      readStates.set(channelId, {
+        ...current,
+        unreadCount: current.unreadCount + 1,
+        mentionCount: current.mentionCount + (mention ? 1 : 0),
+      });
+      return { readStates };
+    }),
 
   lockChannelDrag: () =>
     set((state) => ({ channelDragLockCount: state.channelDragLockCount + 1 })),
@@ -337,7 +440,7 @@ export const useStore = create<AppState>((set) => ({
       const readStates = new Map(
         (states ?? []).map((s) => [
           s.channelId,
-          { lastReadMessageId: s.lastReadMessageId, mentionCount: s.mentionCount },
+          { lastReadMessageId: s.lastReadMessageId, mentionCount: s.mentionCount, unreadCount: s.unreadCount },
         ]),
       );
       return { user, guilds, readStates, privateChannels: privateChannels ?? [], voiceStates };
@@ -346,7 +449,7 @@ export const useStore = create<AppState>((set) => ({
   markRead: (channelId, messageId) =>
     set((state) => {
       const readStates = new Map(state.readStates);
-      readStates.set(channelId, { lastReadMessageId: messageId, mentionCount: 0 });
+      readStates.set(channelId, { lastReadMessageId: messageId, mentionCount: 0, unreadCount: 0 });
       return { readStates };
     }),
 
@@ -429,6 +532,36 @@ export const useStore = create<AppState>((set) => ({
       saveMutedPeerIds(mutedPeerIds);
       return { mutedPeerIds };
     }),
+
+  setInputSensitivity: (value) => {
+    saveInputSensitivity(value);
+    set({ inputSensitivity: value });
+  },
+  setOutputVolume: (value) => {
+    saveOutputVolume(value);
+    set({ outputVolume: value });
+  },
+  setNoiseSuppression: (value) => {
+    saveNoiseSuppression(value);
+    set({ noiseSuppression: value });
+  },
+  setInputDeviceId: (value) => {
+    saveInputDeviceId(value);
+    set({ inputDeviceId: value });
+  },
+  setOutputDeviceId: (value) => {
+    saveOutputDeviceId(value);
+    set({ outputDeviceId: value });
+  },
+  setPushToTalk: (value) => {
+    savePushToTalk(value);
+    set({ pushToTalk: value });
+  },
+  setPushToTalkKey: (value) => {
+    savePushToTalkKey(value);
+    set({ pushToTalkKey: value });
+  },
+  setPushToTalkActive: (active) => set({ pushToTalkActive: active }),
 
   upsertGuild: (entry) =>
     set((state) => {
@@ -758,7 +891,17 @@ export const useStore = create<AppState>((set) => ({
   setSelfMute: (value) => set({ selfMute: value }),
   setSelfDeaf: (value) => set({ selfDeaf: value }),
   setSelfSharing: (value) => set({ selfSharing: value }),
-  setVoiceChatOpen: (open) => set({ voiceChatOpen: open }),
+  // Ses kanalının chat'i açılırken üye listesi açıksa kapatılır (dar alanda
+  // ikisi sığmıyor) — ama tersi olmaz: chat açıkken üye listesi açılırsa
+  // ikisi birlikte kalır (bkz. kullanıcı isteği).
+  setVoiceChatOpen: (open) =>
+    set((state) => {
+      if (open && state.memberListVisible) {
+        localStorage.setItem('tuscord.memberListVisible', 'false');
+        return { voiceChatOpen: open, memberListVisible: false };
+      }
+      return { voiceChatOpen: open };
+    }),
 
   setScreenStream: (userId, stream) =>
     set((state) => {
@@ -778,6 +921,7 @@ export const useStore = create<AppState>((set) => ({
       voiceChatOpen: false,
       voiceSpeaking: new Set(),
       screenStreams: new Map(),
+      pushToTalkActive: false,
       // Sunucu-taraflı susturma kanal oturumuna bağlı — ayrılınca sıfırlanır
       // (bkz. AppState.serverMutedUserIds yorumu). Kişisel ses tercihleri
       // (channelVolumes/userVolumes/mutedPeerIds) BURADA sıfırlanmaz —

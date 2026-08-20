@@ -9,6 +9,7 @@ import {
   ArrowDown,
   ArrowUp,
   AtSign,
+  Bot,
   Hash,
   Lock,
   Menu,
@@ -34,6 +35,8 @@ import {
 import { api } from '../lib/api';
 import { useStore, type GuildState } from '../store';
 import { can, channelPermissions } from '../lib/permissions';
+import { initialsFromName } from '../lib/initials';
+import { buildForcedChannel } from '../lib/forcedVoiceChannel';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
@@ -48,6 +51,7 @@ import { ServerSettings } from './ServerSettings';
 import { ChannelSettings } from './ChannelSettings';
 import { SearchModal } from './SearchModal';
 import { AdminPanel } from './AdminPanel';
+import { DeveloperPortal } from './DeveloperPortal';
 import { useContextMenu, type MenuItem } from './ContextMenu';
 import {
   VOICE_USER_DRAG_TYPE,
@@ -74,7 +78,21 @@ export function ChatShell() {
   const dmChannel = store.dmView
     ? store.privateChannels.find((c) => c.id === activeChannelId)
     : undefined;
-  const channel = dmChannel ?? guildState?.channels.find((c) => c.id === activeChannelId);
+  // Zorla taşındığım (MOVE_MEMBERS) bir ses kanalı VIEW_CHANNEL'ım yoksa
+  // guildState.channels'ta hiç yok — bulamazsak sentetik kayda düş, yoksa
+  // VoiceStage hiç render olmaz (bkz. buildForcedChannel yorumu, kullanıcı
+  // raporu: ekran paylaşımı/sohbet o kanaldaki herkese görünmeli).
+  const channel =
+    dmChannel ??
+    guildState?.channels.find((c) => c.id === activeChannelId) ??
+    (guildState && activeChannelId === store.voiceChannelId
+      ? (buildForcedChannel(
+          guildState.guild.id,
+          guildState.channels,
+          store.forcedVoiceChannelInfo,
+          store.voiceChannelId,
+        ) ?? undefined)
+      : undefined);
   const messages = activeChannelId ? (store.messages.get(activeChannelId) ?? []) : [];
 
   /**
@@ -114,6 +132,7 @@ export function ChatShell() {
   const [friendsOpen, setFriendsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [developerPortalOpen, setDeveloperPortalOpen] = useState(false);
   /**
    * Aramadan / yanıttan gelen "mesaja git" hedefi. Kanal farklıysa önce o
    * kanala geçilir; MessageList yüklendiğinde mesajı ortalayıp vurgular.
@@ -236,6 +255,25 @@ export function ChatShell() {
       break;
     }
   }
+  // Zorla taşındığım kanal (bkz. buildForcedChannel) hiçbir guildState'in
+  // channels listesinde yok — bulunamadıysa sentetik kayda düş, yoksa bu
+  // kanalın sohbet paneli hiç açılmaz (kullanıcı raporu: o an kanaldaysa
+  // sohbeti görebilmeli).
+  if (!voiceChatChannel && store.forcedVoiceChannelInfo && voiceChannelId) {
+    const forcedGuildState = guilds.get(store.forcedVoiceChannelInfo.guildId);
+    if (forcedGuildState) {
+      const forced = buildForcedChannel(
+        forcedGuildState.guild.id,
+        forcedGuildState.channels,
+        store.forcedVoiceChannelInfo,
+        voiceChannelId,
+      );
+      if (forced) {
+        voiceChatGuildState = forcedGuildState;
+        voiceChatChannel = forced;
+      }
+    }
+  }
   const voiceChatMembers = voiceChatGuildState
     ? (store.members.get(voiceChatGuildState.guild.id) ?? EMPTY_MEMBERS)
     : EMPTY_MEMBERS;
@@ -302,7 +340,9 @@ export function ChatShell() {
    */
   const lastMessageId = messages[messages.length - 1]?.id ?? null;
   useEffect(() => {
-    if (!activeChannelId || !lastMessageId) return;
+    // Sesli kanalın kendisi bir "okundu" kavramına sahip değil — orada
+    // gösterilen katılımcı ızgarası mesaj listesi değil (bkz. VoiceStage.tsx).
+    if (!activeChannelId || !lastMessageId || channel?.type === ChannelType.GUILD_VOICE) return;
 
     const acknowledge = () => {
       if (document.visibilityState !== 'visible') return;
@@ -323,9 +363,11 @@ export function ChatShell() {
     return () => document.removeEventListener('visibilitychange', acknowledge);
   }, [activeChannelId, lastMessageId]);
 
-  // Kanal deÄŸiÅŸince geÃ§miÅŸi yÃ¼kle.
+  // Kanal deÄŸiÅŸince geÃ§miÅŸi yÃ¼kle. Sesli kanalda ana panel metin göstermiyor
+  // (bkz. VoiceStage.tsx) — o kanalın kendi mesajları varsa bile burada
+  // çekmeye gerek yok, VoiceChannelChatPanel açıldığında KENDİSİ çeker.
   useEffect(() => {
-    if (!activeChannelId) return;
+    if (!activeChannelId || channel?.type === ChannelType.GUILD_VOICE) return;
     let cancelled = false;
     void api
       .get<APIMessage[]>(`/channels/${activeChannelId}/messages?limit=50`)
@@ -440,6 +482,15 @@ export function ChatShell() {
               )}
               <button
                 type="button"
+                onClick={() => setDeveloperPortalOpen(true)}
+                aria-label={t('developers.title')}
+                title={t('developers.title')}
+                className="rounded p-1.5 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-ink)]"
+              >
+                <Bot size={17} />
+              </button>
+              <button
+                type="button"
                 onClick={() => setSettingsOpen(true)}
                 aria-label={t('profile.settings')}
                 title={t('profile.settings')}
@@ -526,10 +577,13 @@ export function ChatShell() {
           )}
         </header>
 
-        {/* Ekran paylaşımı sahnesi — ses kanalındayken aktif paylaşımlar. */}
-        <VoiceStage focusedPresenterId={focusedPresenterId} onFocus={setFocusedPresenterId} />
-
-        {focusedPresenterId ? null : channel ? (
+        {channel?.type === ChannelType.GUILD_VOICE ? (
+          <VoiceStage
+            channelId={channel.id}
+            focusedPresenterId={focusedPresenterId}
+            onFocus={setFocusedPresenterId}
+          />
+        ) : channel ? (
           <>
             <MessageList
               messages={messages}
@@ -633,6 +687,7 @@ export function ChatShell() {
       )}
 
       {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
+      {developerPortalOpen && <DeveloperPortal onClose={() => setDeveloperPortalOpen(false)} />}
 
       {profileUser && (
         <ProfilePopout
@@ -679,7 +734,17 @@ function ServerRail({ onNavigate }: NavProps) {
   const { t } = useTranslation();
   const { guilds, activeGuildId, setActive, openDMView, dmView } = useStore();
   const removeGuild = useStore((s) => s.removeGuild);
+  const isAdmin = useStore((s) => s.user?.isAdmin ?? false);
   const [modalOpen, setModalOpen] = useState(false);
+  /**
+   * Yönetici paneli erişimi BURADA da var — kullanıcı çubuğundaki küçük
+   * kalkan ikonuna ek olarak, sunucu şeridinin EN ÜSTÜNDE her zaman görünür
+   * (bkz. kullanıcı raporu: admin girişi "normal kullanıcıdan farksız"
+   * görünüyordu — hiç sunucusu olmayan bir admin hesabında alt kullanıcı
+   * çubuğu görünse de küçük ikon gözden kaçabiliyordu). Kendi state'i var,
+   * ChatShell'deki adminOpen'dan BAĞIMSIZ — ikisi de aynı AdminPanel'i açar.
+   */
+  const [adminOpen, setAdminOpen] = useState(false);
   // Ayarları açık olan sunucu (sağ tık → Ayarlar).
   const [settingsGuild, setSettingsGuild] = useState<GuildState | null>(null);
   const menu = useContextMenu();
@@ -730,6 +795,19 @@ function ServerRail({ onNavigate }: NavProps) {
       >
         <AtSign size={20} />
       </button>
+
+      {isAdmin && (
+        <button
+          type="button"
+          title={t('admin.title')}
+          aria-label={t('admin.title')}
+          onClick={() => setAdminOpen(true)}
+          className="flex h-12 w-12 items-center justify-center rounded-3xl bg-[var(--color-brand)]/20 text-[var(--color-brand)] transition-all hover:rounded-2xl hover:bg-[var(--color-brand)] hover:text-black"
+        >
+          <ShieldCheck size={20} />
+        </button>
+      )}
+
       <div className="my-1 h-px w-8 bg-[var(--color-line)]" />
 
       {[...guilds.values()].map((state) => {
@@ -755,7 +833,7 @@ function ServerRail({ onNavigate }: NavProps) {
             {state.guild.iconUrl ? (
               <img src={state.guild.iconUrl} alt="" className="h-full w-full object-cover" />
             ) : (
-              state.guild.name.slice(0, 2).toLocaleUpperCase('tr')
+              initialsFromName(state.guild.name)
             )}
           </button>
         );
@@ -781,6 +859,8 @@ function ServerRail({ onNavigate }: NavProps) {
           }}
         />
       )}
+
+      {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
 
       {settingsGuild && (
         <ServerSettings guildState={settingsGuild} onClose={() => setSettingsGuild(null)} />
@@ -817,7 +897,9 @@ function DMList({ onNavigate }: NavProps) {
           const others = (channel.recipients ?? []).filter((r) => r.id !== user?.id);
           const label =
             others.map((r) => r.displayName ?? r.username).join(', ') || t('dm.unknown');
-          const mentionCount = readStates.get(channel.id)?.mentionCount ?? 0;
+          const readState = readStates.get(channel.id);
+          const mentionCount = readState?.mentionCount ?? 0;
+          const unreadCount = readState?.unreadCount ?? 0;
 
           return (
             <button
@@ -834,14 +916,28 @@ function DMList({ onNavigate }: NavProps) {
               }`}
             >
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-xs">
-                {label.slice(0, 2).toLocaleUpperCase('tr')}
+                {initialsFromName(label)}
               </span>
               <span className="truncate">{label}</span>
-              {mentionCount > 0 && (
-                <span className="ml-auto rounded-full bg-[var(--color-dnd)] px-1.5 text-xs font-semibold text-white">
-                  {mentionCount > 99 ? '99+' : mentionCount}
-                </span>
-              )}
+              {(() => {
+                const otherUnread = unreadCount - mentionCount;
+                return (
+                  <>
+                    {otherUnread > 0 && (
+                      <span className="ml-auto rounded-full bg-[var(--color-surface-3)] px-1.5 text-xs font-semibold text-[var(--color-ink-muted)]">
+                        {otherUnread > 99 ? '99+' : otherUnread}
+                      </span>
+                    )}
+                    {mentionCount > 0 && (
+                      <span
+                        className={`${otherUnread > 0 ? '' : 'ml-auto'} rounded-full bg-[var(--color-dnd)] px-1.5 text-xs font-semibold text-white`}
+                      >
+                        {mentionCount > 99 ? '99+' : mentionCount}
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
             </button>
           );
         })}
@@ -961,35 +1057,16 @@ function ChannelList({ onNavigate }: NavProps) {
   const canReorder = can(guildPerms, Permission.REORDER_CHANNELS) && channelDragLockCount === 0;
   const canServerMute = can(guildPerms, Permission.MUTE_MEMBERS);
   const canMoveMembers = can(guildPerms, Permission.MOVE_MEMBERS);
+  const canDisconnectMembers = can(guildPerms, Permission.DISCONNECT_MEMBERS);
   const voiceChannels = state.channels.filter((c) => c.type === ChannelType.GUILD_VOICE);
-  /**
-   * MOVE_MEMBERS ile VIEW_CHANNEL iznim olmayan bir kanala taşındığımda
-   * (bkz. forcedVoiceChannelInfo yorumu) kanal `state.channels`'ta hiç
-   * yok — burada sentetik bir APIChannel kurup SES KANALLARI listesinin
-   * sonuna ekliyoruz ki diğer sesli kanallardan görsel olarak farksız
-   * görünsün (sadece sıralama/kanal-ayarları gibi VIEW_CHANNEL gerektiren
-   * işlemler için gerçek bir kanal kaydı gibi davranmaz).
-   */
-  const forcedChannel: APIChannel | null =
-    forcedVoiceChannelInfo &&
-    forcedVoiceChannelInfo.guildId === state.guild.id &&
-    voiceChannelId &&
-    !state.channels.some((c) => c.id === voiceChannelId)
-      ? {
-          id: voiceChannelId,
-          guildId: state.guild.id,
-          type: ChannelType.GUILD_VOICE,
-          name: forcedVoiceChannelInfo.name,
-          topic: null,
-          position: Number.MAX_SAFE_INTEGER,
-          parentId: null,
-          slowmodeSeconds: 0,
-          nsfw: false,
-          locked: false,
-          lastMessageId: null,
-          sticker: null,
-        }
-      : null;
+  // Sentetik ses kanalı — bkz. buildForcedChannel yorumu (paylaşılan, ana
+  // paneldeki `channel` hesaplamasıyla AYNI mantık).
+  const forcedChannel: APIChannel | null = buildForcedChannel(
+    state.guild.id,
+    state.channels,
+    forcedVoiceChannelInfo,
+    voiceChannelId,
+  );
   const canCreateText = can(guildPerms, Permission.CREATE_TEXT_CHANNELS);
   const canCreateVoice = can(guildPerms, Permission.CREATE_VOICE_CHANNELS);
   // Rol atama (ASSIGN_ROLES) yetkisi olan ama rol TANIMLARINI düzenleme
@@ -1104,6 +1181,7 @@ function ChannelList({ onNavigate }: NavProps) {
           channel={channel}
           canServerMute={canServerMute}
           canMoveMembers={canMoveMembers}
+          canDisconnectMembers={canDisconnectMembers}
           voiceChannels={voiceChannels}
           menu={voiceMenu && voiceMenu.channelId === channel.id ? voiceMenu : null}
           onOpenMenu={(state) => setVoiceMenu({ ...state, channelId: channel.id })}
@@ -1121,6 +1199,7 @@ function ChannelList({ onNavigate }: NavProps) {
           locked={channel.locked}
           active={channel.id === activeChannelId}
           unread={isUnread(channel)}
+          unreadCount={readStates.get(channel.id)?.unreadCount ?? 0}
           mentionCount={readStates.get(channel.id)?.mentionCount ?? 0}
           onClick={() => {
             setActive(state!.guild.id, channel.id);
@@ -1331,6 +1410,7 @@ function ChannelList({ onNavigate }: NavProps) {
                   channel={forcedChannel}
                   canServerMute={canServerMute}
                   canMoveMembers={canMoveMembers}
+                  canDisconnectMembers={canDisconnectMembers}
                   voiceChannels={voiceChannels}
                   menu={voiceMenu && voiceMenu.channelId === forcedChannel.id ? voiceMenu : null}
                   onOpenMenu={(menuState) => setVoiceMenu({ ...menuState, channelId: forcedChannel.id })}
@@ -1378,6 +1458,7 @@ function ChannelButton({
   active,
   locked,
   unread,
+  unreadCount,
   mentionCount,
   onClick,
 }: {
@@ -1385,6 +1466,7 @@ function ChannelButton({
   active: boolean;
   locked: boolean;
   unread: boolean;
+  unreadCount: number;
   mentionCount: number;
   onClick: () => void;
 }) {
@@ -1403,15 +1485,32 @@ function ChannelButton({
       {locked ? <Lock size={16} /> : <Hash size={16} />}
       <span className="truncate">{name}</span>
 
-      {mentionCount > 0 ? (
-        // Bahsetme sayısı okunmamış işaretinden ayrı gösterilir: "biri seni
-        // çağırdı" ile "kanalda yeni mesaj var" farklı aciliyette.
-        <span className="ml-auto rounded-full bg-[var(--color-dnd)] px-1.5 text-xs font-semibold text-white">
-          {mentionCount > 99 ? '99+' : mentionCount}
-        </span>
-      ) : unread && !active ? (
-        <span className="ml-auto h-2 w-2 rounded-full bg-[var(--color-ink)]" />
-      ) : null}
+      {/* İkisi de bağımsız gösterilir: bahsetme (kırmızı) diğer okunmamışları
+          EZMEZ — biri gelince öbürü kaybolursa "normal mesajlar okunmadı"
+          bilgisi kaybolurdu (bkz. kullanıcı raporu). Gri rozet mentionCount'u
+          TEKRAR SAYMAZ, yalnızca bahsetme OLMAYAN okunmamışları gösterir. */}
+      {(() => {
+        const otherUnread = unreadCount - mentionCount;
+        return (
+          <>
+            {otherUnread > 0 && !active && (
+              <span className="ml-auto rounded-full bg-[var(--color-surface-3)] px-1.5 text-xs font-semibold text-[var(--color-ink-muted)]">
+                {otherUnread > 99 ? '99+' : otherUnread}
+              </span>
+            )}
+            {mentionCount > 0 && (
+              <span
+                className={`${otherUnread > 0 && !active ? '' : 'ml-auto'} rounded-full bg-[var(--color-dnd)] px-1.5 text-xs font-semibold text-white`}
+              >
+                {mentionCount > 99 ? '99+' : mentionCount}
+              </span>
+            )}
+            {mentionCount === 0 && otherUnread <= 0 && unread && !active && (
+              <span className="ml-auto h-2 w-2 rounded-full bg-[var(--color-ink)]" />
+            )}
+          </>
+        );
+      })()}
     </button>
   );
 }
@@ -1571,7 +1670,7 @@ function MemberGroup({
   label: string;
   labelColor?: string;
   members: APIGuildMember[];
-  presence: Map<string, 'online' | 'idle' | 'dnd' | 'offline'>;
+  presence: Map<string, PresenceStatus>;
   dim?: boolean;
   onOpenProfile: (member: APIGuildMember) => void;
 }) {

@@ -11,11 +11,13 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { eq, lt } from 'drizzle-orm';
+import { GatewayEvent } from '@tuscord/shared';
 import { db } from '../db/index.js';
 import { sessions, users } from '../db/schema.js';
 import { redis, RedisKeys } from '../redis.js';
 import { env } from '../env.js';
 import { nextId } from '../lib/id.js';
+import { publishToUsers } from '../services/events.js';
 
 export const SESSION_COOKIE = 'tuscord_session';
 
@@ -69,9 +71,21 @@ export interface CreateSessionInput {
   userAgent?: string | null;
 }
 
+/**
+ * Aynı anda yalnızca bir oturum: yeni giriş, tarayıcı/masaüstü fark
+ * etmeksizin önceki TÜM oturumları düşürür (bkz. kullanıcı isteği). Yalnızca
+ * veritabanı satırını silmek yetmez — eski istemci hâlâ gateway'e bağlıysa
+ * bir sonraki REST isteğine kadar çalışmaya devam ederdi; bu yüzden
+ * SESSION_INVALIDATED ile anında koparılır (bkz. useGateway.ts).
+ *
+ * Kayıt akışında da çağrılır ama orada zaten önceki oturum yoktur —
+ * `destroyAllSessions`/yayın no-op olur, zararsız.
+ */
 export async function createSession(
   input: CreateSessionInput,
 ): Promise<{ token: string; sessionId: bigint; expiresAt: Date }> {
+  await destroyAllSessions(input.userId);
+
   const token = generateToken();
   const tokenHash = hashToken(token);
   const sessionId = nextId();
@@ -97,6 +111,11 @@ export async function createSession(
     'EX',
     env.SESSION_TTL_DAYS * 86_400,
   );
+
+  await publishToUsers([input.userId.toString()], {
+    event: GatewayEvent.SESSION_INVALIDATED,
+    payload: {},
+  });
 
   return { token, sessionId, expiresAt };
 }
@@ -189,6 +208,25 @@ export async function destroyAllSessions(userId: bigint, exceptSessionId?: bigin
   for (const row of toDelete) {
     await db.delete(sessions).where(eq(sessions.id, row.id));
   }
+}
+
+/**
+ * Bir platform yöneticisi hesabı yasakladığında/sildiğinde: oturumları
+ * düşürmek TEK BAŞINA yetmez — kullanıcı hâlâ gateway'e bağlıysa (canlı
+ * WebSocket) sayfayı yenileyene kadar bağlı kalıp mesaj yazmaya devam
+ * edebilir (bkz. kullanıcı raporu). FORCE_LOGOUT ile bağlı istemci ANINDA
+ * kendini oturumdan düşürür — SESSION_INVALIDATED ile aynı mekanizma,
+ * yalnızca sebep farklı (bkz. useGateway.ts).
+ */
+export async function forceLogoutUser(
+  userId: bigint,
+  reason: 'account_banned' | 'account_deleted',
+): Promise<void> {
+  await destroyAllSessions(userId);
+  await publishToUsers([userId.toString()], {
+    event: GatewayEvent.FORCE_LOGOUT,
+    payload: { reason },
+  });
 }
 
 /** Süresi dolmuş kayıtları temizler — zamanlanmış görev olarak çalışır. */

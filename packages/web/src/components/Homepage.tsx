@@ -72,18 +72,17 @@ export function Homepage({ onEnter }: Props) {
             </p>
 
             <div className="mt-5 flex shrink-0 flex-col items-center gap-2.5 sm:flex-row sm:gap-3 lg:mt-8">
-              {/* Henüz bir masaüstü uygulaması yok — bilerek boş href, "yakında" etiketiyle. */}
+              {/* Masaüstü uygulaması yayında — Electron kabuğu, web arayüzünü
+                  aynen yükler (bkz. packages/desktop). */}
               <a
-                href="#"
-                onClick={(e) => e.preventDefault()}
-                aria-disabled="true"
-                title={t('homepage.downloadSoon')}
-                className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] opacity-70 transition hover:bg-[var(--color-surface-3)]"
+                href="/downloads/Tuscord-Setup-0.1.4.exe"
+                title={t('homepage.downloadLive')}
+                className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
               >
                 <Download size={18} />
                 {t('homepage.downloadWindows')}
-                <span className="rounded-full bg-[var(--color-surface-3)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                  {t('homepage.soon')}
+                <span className="rounded-full bg-[var(--color-brand)]/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-brand)]">
+                  {t('homepage.downloadLive')}
                 </span>
               </a>
               <button

@@ -28,6 +28,7 @@ import {
 import { db } from '../db/index.js';
 import { channels, guildMembers, guilds, memberRoles, permissionOverwrites, roles } from '../db/schema.js';
 import { Errors } from '../lib/errors.js';
+import { isInVoiceChannel } from './voicePresence.js';
 import type { Channel } from '../db/schema.js';
 
 export interface GuildContext extends GuildLike {
@@ -143,6 +144,13 @@ export interface ChannelAccess extends GuildAccess {
 /**
  * Kanal bağlamını yükler ve nihai izinleri hesaplar.
  * VIEW_CHANNEL yoksa 404 döner — gizli kanalın varlığı sızmasın (spec Bölüm 6).
+ *
+ * TEK istisna: bir moderatör MOVE_MEMBERS ile birini bu izne sahip olmadığı
+ * bir ses kanalına taşıdıysa (bkz. gateway/index.ts forceMoveVoice), o
+ * kullanıcı O KANALDA kaldığı sürece kanalı GÖREBİLİR — yalnızca görme +
+ * geçmiş okuma (VIEW_CHANNEL/READ_MESSAGE_HISTORY); SEND_MESSAGES vb. hâlâ
+ * normal hesaplanan role/overwrite iznine tabi (bkz. voicePresence.ts,
+ * kullanıcı isteği: "o an kanalın içindeyse görebilsin").
  */
 export async function requireChannelAccess(
   channelId: bigint,
@@ -155,7 +163,14 @@ export async function requireChannelAccess(
 
   const access = await requireGuildAccess(channel.guildId, userId);
   const overwrites = await loadChannelOverwrites(channelId);
-  const permissions = computePermissions(access.guild, access.member, overwrites);
+  let permissions = computePermissions(access.guild, access.member, overwrites);
+
+  if (
+    !has(permissions, Permission.VIEW_CHANNEL) &&
+    isInVoiceChannel(userId.toString(), channelId.toString())
+  ) {
+    permissions |= Permission.VIEW_CHANNEL | Permission.READ_MESSAGE_HISTORY;
+  }
 
   if (!has(permissions, Permission.VIEW_CHANNEL)) {
     throw Errors.notFound('unknown_channel', 'Kanal bulunamadı');

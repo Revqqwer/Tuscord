@@ -65,6 +65,8 @@ export const Permission = {
   DEAFEN_MEMBERS: 1n << 21n,
   MOVE_MEMBERS: 1n << 22n,
   VIDEO: 1n << 23n, // Faz 3
+  /** Bir kullanıcıyı bulunduğu sesli kanaldan tamamen çıkarır (bağlantıyı keser). */
+  DISCONNECT_MEMBERS: 1n << 29n,
 
   // Her şeyi baypas eder
   ADMINISTRATOR: 1n << 24n,
@@ -162,7 +164,15 @@ export const PERMISSION_GROUPS = [
   },
   {
     id: 'voice',
-    permissions: ['CONNECT', 'SPEAK', 'VIDEO', 'MUTE_MEMBERS', 'DEAFEN_MEMBERS', 'MOVE_MEMBERS'],
+    permissions: [
+      'CONNECT',
+      'SPEAK',
+      'VIDEO',
+      'MUTE_MEMBERS',
+      'DEAFEN_MEMBERS',
+      'MOVE_MEMBERS',
+      'DISCONNECT_MEMBERS',
+    ],
   },
   {
     id: 'danger',
