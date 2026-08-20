@@ -163,6 +163,7 @@ export const tr = {
     cancelReply: 'Yanıtı iptal et',
     jumpToReply: 'Yanıtlanan mesaja git',
     doubleClickReply: 'Yanıtlamak için çift tıkla',
+    playVideo: 'Videoyu oynat',
     reportPrompt: 'Bu mesajı neden bildiriyorsun?',
     zoomIn: 'Yakınlaştır',
     zoomOut: 'Uzaklaştır',

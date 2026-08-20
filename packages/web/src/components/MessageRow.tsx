@@ -14,6 +14,7 @@ import { useStore } from '../store';
 import { MessageContent } from './MessageContent';
 import { Avatar } from './Avatar';
 import { ImageLightbox } from './ImageLightbox';
+import { LinkEmbeds } from './LinkEmbeds';
 
 /** Hızlı tepki seçenekleri — tam emoji seçici Faz 1.5. */
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '🔥'] as const;
@@ -224,6 +225,8 @@ export function MessageRow({
             )}
           </div>
         )}
+
+        {!editing && <LinkEmbeds content={message.content} />}
 
         {message.attachments.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-2">
