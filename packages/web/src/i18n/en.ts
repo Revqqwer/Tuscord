@@ -163,6 +163,7 @@ export const en = {
     cancelReply: 'Cancel reply',
     jumpToReply: 'Jump to replied message',
     doubleClickReply: 'Double-click to reply',
+    playVideo: 'Play video',
     reportPrompt: 'Why are you reporting this message?',
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',

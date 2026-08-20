@@ -61,6 +61,13 @@ class VoiceManager {
   private audioContext: AudioContext | null = null;
   private localAnalyser: AnalyserNode | null = null;
   private speakingRaf: number | null = null;
+  /**
+   * userId → RMS'in eşiği son aştığı zaman (performance.now()). Konuşma
+   * göstergesi bunu okuyup HANGOVER_MS boyunca "konuşuyor" kalır — kelimeler
+   * arası doğal kısa boşluklar eşiğin altına düşürse bile yeşil çerçeve her
+   * seferinde yanıp sönmesin diye (bkz. kullanıcı raporu).
+   */
+  private readonly lastAboveThreshold = new Map<string, number>();
   /** Bir moderatör susturdu — kilit açılana kadar kendi mikrofonumu açamam. */
   private serverMuteLocked = false;
 
@@ -141,6 +148,7 @@ class VoiceManager {
     if (this.speakingRaf !== null) cancelAnimationFrame(this.speakingRaf);
     this.speakingRaf = null;
     this.localAnalyser = null;
+    this.lastAboveThreshold.clear();
     void this.audioContext?.close();
     this.audioContext = null;
 
@@ -631,6 +639,7 @@ class VoiceManager {
       audio.remove();
     }
     this.peers.delete(peerId);
+    this.lastAboveThreshold.delete(peerId);
     useStore.getState().setSpeaking(peerId, false);
     useStore.getState().setScreenStream(peerId, null);
   }
@@ -684,6 +693,19 @@ class VoiceManager {
       return Math.sqrt(sum / buffer.length);
     };
 
+    // Eşiği aştıktan sonra bu kadar süre daha "konuşuyor" gösterilir —
+    // "Merhaba ben..." gibi kelimeler arası doğal kısa sessizliklerde
+    // gösterge kapanıp açılmasın diye (bkz. kullanıcı raporu: yeşil çerçeve
+    // her kelime arasında yanıp sönüyordu).
+    const HANGOVER_MS = 500;
+
+    /** now anında eşiği aşıyorsa zaman damgasını güncelle, ardından hangover'a göre karar ver. */
+    const updateSpeaking = (id: string, aboveThreshold: boolean, now: number): boolean => {
+      if (aboveThreshold) this.lastAboveThreshold.set(id, now);
+      const last = this.lastAboveThreshold.get(id);
+      return last !== undefined && now - last < HANGOVER_MS;
+    };
+
     let lastTick = 0;
     const loop = (time: number) => {
       this.speakingRaf = requestAnimationFrame(loop);
@@ -692,12 +714,15 @@ class VoiceManager {
 
       const store = useStore.getState();
       const threshold = speakingThreshold();
+      const now = performance.now();
       if (this.localAnalyser) {
-        const speaking = !store.selfMute && !store.selfDeaf && rms(this.localAnalyser) > threshold;
-        store.setSpeaking(this.myId, speaking);
+        const aboveThreshold = !store.selfMute && !store.selfDeaf && rms(this.localAnalyser) > threshold;
+        store.setSpeaking(this.myId, updateSpeaking(this.myId, aboveThreshold, now));
       }
       for (const [peerId, peer] of this.peers) {
-        if (peer.analyser) store.setSpeaking(peerId, rms(peer.analyser) > threshold);
+        if (peer.analyser) {
+          store.setSpeaking(peerId, updateSpeaking(peerId, rms(peer.analyser) > threshold, now));
+        }
       }
     };
     this.speakingRaf = requestAnimationFrame(loop);
