@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<title>Ekran paylaşımı</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: #111318;
+    color: #f5f7fa;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  header {
+    padding: 14px 16px 0;
+    flex-shrink: 0;
+  }
+  h1 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid #22252c;
+  }
+  .tabs button {
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 8px 4px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #9aa3af;
+    cursor: pointer;
+  }
+  .tabs button.active {
+    color: #14b8a6;
+    border-bottom-color: #14b8a6;
+  }
+  .grid {
+    flex: 1;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    padding: 14px 16px;
+    align-content: start;
+  }
+  button.source {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    background: #1a1d24;
+    border: 2px solid transparent;
+    border-radius: 8px;
+    padding: 8px;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+  }
+  button.source:hover, button.source:focus-visible {
+    border-color: #14b8a6;
+    outline: none;
+  }
+  button.source .thumb {
+    width: 100%;
+    height: 90px;
+    border-radius: 4px;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  button.source .thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  button.source span.label {
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  footer {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid #22252c;
+  }
+  footer button {
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    background: #22252c;
+    color: #f5f7fa;
+  }
+  footer button:hover {
+    background: #2a2e37;
+  }
+  .empty {
+    grid-column: 1 / -1;
+    padding: 20px 0;
+    font-size: 13px;
+    color: #9aa3af;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Paylaşılacak ekranı veya uygulamayı seç</h1>
+    <div class="tabs">
+      <button type="button" class="active" data-kind="screen">Ekran</button>
+      <button type="button" data-kind="window">Uygulamalar</button>
+    </div>
+  </header>
+  <div class="grid" id="grid"><div class="empty">Yükleniyor…</div></div>
+  <footer>
+    <button type="button" id="cancel">İptal</button>
+  </footer>
+  <script>
+    let allSources = [];
+    let activeKind = 'screen';
+
+    const grid = document.getElementById('grid');
+    const tabs = document.querySelectorAll('.tabs button');
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        activeKind = tab.dataset.kind;
+        tabs.forEach((t) => t.classList.toggle('active', t === tab));
+        render();
+      });
+    });
+
+    document.getElementById('cancel').addEventListener('click', () => window.picker.cancel());
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') window.picker.cancel();
+    });
+
+    function render() {
+      const items = allSources.filter((s) => s.kind === activeKind);
+      grid.innerHTML = '';
+      if (items.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent =
+          activeKind === 'screen' ? 'Paylaşılabilecek ekran bulunamadı.' : 'Paylaşılabilecek uygulama penceresi bulunamadı.';
+        grid.append(empty);
+        return;
+      }
+      for (const source of items) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'source';
+        btn.addEventListener('click', () => window.picker.select(source.id));
+
+        const thumb = document.createElement('div');
+        thumb.className = 'thumb';
+        const img = document.createElement('img');
+        img.src = source.thumbnail;
+        img.alt = '';
+        thumb.append(img);
+
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = source.displayName;
+
+        btn.append(thumb, label);
+        grid.append(btn);
+      }
+    }
+
+    window.picker.onSources((sources) => {
+      let screenIndex = 0;
+      allSources = sources.map((s) => ({
+        ...s,
+        displayName: s.kind === 'screen' ? `Ekran ${++screenIndex}` : s.name,
+      }));
+      render();
+    });
+  </script>
+</body>
+</html>

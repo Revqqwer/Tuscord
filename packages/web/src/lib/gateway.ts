@@ -10,11 +10,13 @@
 import {
   GatewayCloseCode,
   GatewayOp,
+  PresenceStatus,
   type GatewayEvent,
   type GatewayPacket,
   type HelloPayload,
   type ReadyPayload,
 } from '@tuscord/shared';
+import { useStore } from '../store';
 
 export type GatewayListener = (event: GatewayEvent, payload: unknown) => void;
 export type StatusListener = (status: GatewayStatus) => void;
@@ -96,7 +98,8 @@ export class GatewayClient {
             d: { token: '', sessionId: this.sessionId, seq: this.seq },
           });
         } else {
-          this.send({ op: GatewayOp.IDENTIFY, d: { token: '' } });
+          const status = useStore.getState().invisible ? PresenceStatus.INVISIBLE : PresenceStatus.ONLINE;
+          this.send({ op: GatewayOp.IDENTIFY, d: { token: '', status } });
         }
         break;
       }
@@ -140,6 +143,21 @@ export class GatewayClient {
   /** Dışarıdan opcode gönderimi (ses durumu / WebRTC sinyali). */
   sendOp(op: GatewayOp, d: unknown): void {
     this.send({ op, d });
+  }
+
+  /**
+   * Çevrimiçi durumumu gizle/göster — UserSettings.tsx buradan çağırır.
+   * Yerel tercihi kaydeder (bkz. store.setInvisible, localStorage'da kalıcı
+   * — bir sonraki IDENTIFY'da da uygulanır, bkz. connect()) VE bağlıysam
+   * ANINDA sunucuya bildirir, yeniden bağlanmayı beklemez.
+   */
+  setInvisible(value: boolean): void {
+    useStore.getState().setInvisible(value);
+    if (this.isOpen) {
+      this.sendOp(GatewayOp.PRESENCE_UPDATE, {
+        status: value ? PresenceStatus.INVISIBLE : PresenceStatus.ONLINE,
+      });
+    }
   }
 
   /** Bağlantı açık mı — ses yöneticisi yeniden bağlanmayı buradan anlar. */

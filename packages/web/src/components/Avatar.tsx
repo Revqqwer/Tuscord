@@ -6,12 +6,21 @@
  * aynı kişi her yerde aynı renkte görünür.
  */
 
+import type { PresenceStatus } from '@tuscord/shared';
+
 interface Props {
   name: string;
   avatarUrl?: string | null;
   size?: number;
-  /** Çevrimiçi durum noktası (verilirse sağ altta). */
-  status?: 'online' | 'idle' | 'dnd' | 'offline';
+  /**
+   * Çevrimiçi durum noktası (verilirse sağ altta). 'invisible' asla buraya
+   * gelmemeli (bkz. server gateway/index.ts setPresence — başkalarına hep
+   * 'offline' yayınlanır) ama tip STATUS_COLOR'da karşılığı olmadığı için
+   * zararsız (nokta hiç boyanmaz).
+   */
+  status?: PresenceStatus;
+  /** Verilirse ada göre otomatik baş harf yerine bu kullanılır (bkz. sunucu ikonu, initialsFromName). */
+  initials?: string;
 }
 
 /** Ada göre deterministik bir arka plan tonu (baş harf modu). */
@@ -28,8 +37,8 @@ const STATUS_COLOR: Record<string, string> = {
   offline: 'var(--color-ink-faint)',
 };
 
-export function Avatar({ name, avatarUrl, size = 40, status }: Props) {
-  const initials = name.slice(0, 2).toLocaleUpperCase('tr');
+export function Avatar({ name, avatarUrl, size = 40, status, initials: initialsOverride }: Props) {
+  const initials = initialsOverride ?? name.slice(0, 2).toLocaleUpperCase('tr');
   const dot = Math.max(8, Math.round(size * 0.28));
 
   return (

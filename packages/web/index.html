@@ -9,6 +9,26 @@
 
     <title>Tuscord</title>
 
+    <!--
+      Sosyal medya paylaşım kartı (Open Graph + X/Twitter). Görsel
+      scripts/generate-og-image.mjs ile üretildi (bkz. yorumu: X, og:image
+      için SVG kabul etmiyor, raster gerekiyor). Mutlak URL şart — göreli
+      yol paylaşım kartı tarayıcılarında (X, Discord, WhatsApp vb.) çalışmaz.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Tuscord" />
+    <meta property="og:title" content="Tuscord" />
+    <meta property="og:description" content="Arkadaşlarınla sohbet etmenin en rahat yolu" />
+    <meta property="og:url" content="https://tuscord.com" />
+    <meta property="og:image" content="https://tuscord.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Tuscord" />
+    <meta name="twitter:description" content="Arkadaşlarınla sohbet etmenin en rahat yolu" />
+    <meta name="twitter:image" content="https://tuscord.com/og-image.png" />
+
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <!--

@@ -9,7 +9,7 @@
  *  - Her kimlik olayı 5651 trafik kaydına yazılır.
  */
 
-import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -26,6 +26,7 @@ import {
 } from '../auth/session.js';
 import { Errors } from '../lib/errors.js';
 import { nextId } from '../lib/id.js';
+import { allocateDiscriminator } from '../lib/username.js';
 import { env } from '../env.js';
 import { logTraffic } from '../services/compliance.js';
 import { emailDomainDeliverable } from '../services/email-domain.js';
@@ -51,18 +52,6 @@ const loginBody = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(1).max(Limits.PASSWORD_MAX),
 });
-
-/** Kullanıcı adı + discriminator çifti benzersiz olmalı; boş dördül bulana kadar dene. */
-async function allocateDiscriminator(username: string): Promise<string> {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const candidate = String(randomInt(1, 10_000)).padStart(4, '0');
-    const existing = await db.query.users.findFirst({
-      where: and(eq(users.username, username), eq(users.discriminator, candidate)),
-    });
-    if (!existing) return candidate;
-  }
-  throw Errors.conflict('username_taken', 'Bu kullanıcı adı dolu, başka bir tane dene');
-}
 
 function hashVerificationToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -180,7 +169,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       ? await verifyPassword(user.passwordHash, body.password)
       : await verifyPassword(await dummyHash(), body.password);
 
-    if (!user || !passwordOk) {
+    // Bot hesaplarının bilinen bir parolası yok (rastgele/kullanılamaz hash) —
+    // passwordOk zaten hep false döner, ama enumeration'a mahal vermemek için
+    // aynı genel mesajla aynı yoldan reddet.
+    if (!user || !passwordOk || user.isBot) {
       await logTraffic({ userId: user?.id ?? null, eventType: 'login_failed', ip });
       throw Errors.unauthorized('invalid_credentials', 'E-posta veya parola hatalı');
     }

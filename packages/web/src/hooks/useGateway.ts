@@ -5,6 +5,7 @@
  */
 
 import { useEffect } from 'react';
+import i18n from 'i18next';
 import {
   GatewayEvent,
   type APIChannel,
@@ -13,6 +14,7 @@ import {
   type APIMessage,
   type APIRole,
   type ReadyPayload,
+  type VoiceForceDisconnectPayload,
   type VoiceForceMovePayload,
   type VoiceForceMutePayload,
   type VoiceSignalPayload,
@@ -22,6 +24,10 @@ import { gateway } from '../lib/gateway';
 import { voice } from '../lib/voice';
 import { useStore } from '../store';
 import { chimesSuppressed, playVoiceChime } from '../lib/voiceChime';
+import { playMessageChime } from '../lib/messageChime';
+
+/** Bu üye sayısını aşan sunucularda mesaj sesi otomatik kapanır (bahsetmeler hariç). */
+const LARGE_GUILD_SOUND_THRESHOLD = 50;
 
 /**
  * Bahsedildiğinde ve sekme odakta değilken tarayıcı bildirimi göster.
@@ -70,6 +76,37 @@ function maybeChimeForPeer(data: VoiceStateUpdatePayload): void {
   else if (wasHere && !isHereNow) playVoiceChime('leave');
 }
 
+/**
+ * Bir kanal şu an okunuyor mu (rozet artırma/mesaj sesi buna göre atlanır).
+ *
+ * Ses kanalının kendi sohbeti ÖZEL: yalnızca yan panel (voiceChatOpen)
+ * açıkken okunuyor sayılır — sidebar'da sadece SEÇİLİ olması yetmez (bkz.
+ * ChatShell.tsx'teki aynı ayrım, ack effect'i). Diğer her kanal (metin/DM)
+ * için ana panelde açık olması yeterli.
+ */
+function isChannelBeingViewed(channelId: string, state: ReturnType<typeof useStore.getState>): boolean {
+  if (document.visibilityState !== 'visible') return false;
+  if (channelId === state.voiceChannelId) return state.voiceChatOpen;
+  return channelId === state.activeChannelId;
+}
+
+/**
+ * Yeni mesaj/bahsetme sesi — kullanıcı ayarından kapatılabilir (bkz.
+ * UserSettings.tsx), kalabalık sunucularda bahsetme DIŞINDA otomatik
+ * susturulur (bkz. LARGE_GUILD_SOUND_THRESHOLD) — yoğun bir sunucuda her
+ * mesajda ses çalması can sıkıcı olurdu, ama biri seni etiketlediğinde
+ * yine de duymalısın.
+ */
+function maybeChimeForMessage(message: APIMessage, mentionsMe: boolean): void {
+  const store = useStore.getState();
+  if (!store.messageSounds) return;
+  if (message.guildId && !mentionsMe) {
+    const memberCount = store.guilds.get(message.guildId)?.memberCount ?? 0;
+    if (memberCount > LARGE_GUILD_SOUND_THRESHOLD) return;
+  }
+  playMessageChime(mentionsMe ? 'mention' : 'message');
+}
+
 export function useGateway(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return;
@@ -99,6 +136,15 @@ export function useGateway(enabled: boolean): void {
           const message = payload as APIMessage;
           state.addMessage(message);
           maybeNotify(message, state.user?.id ?? null);
+
+          const myId = state.user?.id ?? null;
+          if (myId && message.author.id !== myId) {
+            const mentionsMe = message.mentions.includes(myId) || message.mentionEveryone;
+            if (!isChannelBeingViewed(message.channelId, state)) {
+              state.bumpUnread(message.channelId, mentionsMe);
+            }
+            maybeChimeForMessage(message, mentionsMe);
+          }
           break;
         }
         case GatewayEvent.MESSAGE_UPDATE:
@@ -174,6 +220,11 @@ export function useGateway(enabled: boolean): void {
           }
           break;
         }
+        case GatewayEvent.VOICE_FORCE_DISCONNECT: {
+          const data = payload as VoiceForceDisconnectPayload;
+          if (data.userId === state.user?.id) voice.applyServerDisconnect();
+          break;
+        }
         case GatewayEvent.CHANNEL_CREATE:
         case GatewayEvent.CHANNEL_UPDATE: {
           const channel = payload as APIChannel;
@@ -219,6 +270,28 @@ export function useGateway(enabled: boolean): void {
         case GatewayEvent.GUILD_DELETE: {
           const data = payload as { id: string };
           state.removeGuild(data.id);
+          break;
+        }
+        case GatewayEvent.SESSION_INVALIDATED: {
+          // Başka bir yerden (tarayıcı/masaüstü) giriş yapıldı — sunucu zaten
+          // bu oturumu sildi, burada yalnızca yerel durumu temizleyip
+          // kullanıcıyı giriş ekranına döndürüyoruz.
+          alert(i18n.t('auth.sessionInvalidated'));
+          state.setUser(null);
+          break;
+        }
+        case GatewayEvent.FORCE_LOGOUT: {
+          // Bir yönetici hesabı yasakladı/sildi — sunucu zaten oturumu
+          // düşürdü (bkz. auth/session.ts forceLogoutUser); sayfayı
+          // yenileyene kadar bağlı kalıp mesaj yazmaya devam etmesin diye
+          // ANINDA çıkış yapıyoruz (bkz. kullanıcı raporu).
+          const data = payload as { reason?: string };
+          alert(
+            data.reason === 'account_deleted'
+              ? i18n.t('auth.accountDeleted')
+              : i18n.t('auth.accountBanned'),
+          );
+          state.setUser(null);
           break;
         }
         default:

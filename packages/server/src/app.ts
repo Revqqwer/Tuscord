@@ -12,7 +12,8 @@ import { env, isProduction } from './env.js';
 import { APIException, Errors } from './lib/errors.js';
 import { RateLimiter } from './lib/ratelimit.js';
 import { redis } from './redis.js';
-import { SESSION_COOKIE, resolveSession, type AuthenticatedSession } from './auth/session.js';
+import { SESSION_COOKIE, type AuthenticatedSession } from './auth/session.js';
+import { resolveAnyToken } from './auth/bot.js';
 import { clientIp } from './services/compliance.js';
 import { registerRoutes } from './routes/index.js';
 
@@ -28,12 +29,20 @@ declare module 'fastify' {
   }
 }
 
-/** Oturumu zorunlu kılmadan çözer — herkese açık uçlarda kullanıcıyı tanımak için. */
+/**
+ * Oturumu zorunlu kılmadan çözer — herkese açık uçlarda kullanıcıyı tanımak için.
+ *
+ * İki kimlik kaynağı: insan tarayıcısı için `SESSION_COOKIE`, bot istemcileri
+ * için `Authorization: Bot <token>` header'ı — Discord'daki `Bot <token>`
+ * biçimiyle bilinçli olarak aynı, bot geliştirenler için tanıdık.
+ */
 export async function attachSession(request: FastifyRequest): Promise<void> {
   if (request.session) return;
-  const token = request.cookies[SESSION_COOKIE];
+  const authHeader = request.headers.authorization;
+  const botToken = authHeader?.startsWith('Bot ') ? authHeader.slice(4).trim() : null;
+  const token = botToken || request.cookies[SESSION_COOKIE];
   if (!token) return;
-  const session = await resolveSession(token);
+  const session = await resolveAnyToken(token);
   if (session) request.session = session;
 }
 

@@ -35,7 +35,7 @@ const FIELD_MESSAGE_KEY: Record<FieldName, string> = {
 
 export function AuthScreen({ onAuthenticated }: Props) {
   const { t } = useTranslation();
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
@@ -43,6 +43,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
 
   /** Gönderimden önceki istemci kontrolü — sunucuya gitmeden alanda uyar. */
   function validate(): FieldErrors {
@@ -61,6 +62,9 @@ export function AuthScreen({ onAuthenticated }: Props) {
 
     if (email.trim().length === 0) errors.email = t('auth.fieldErrors.email_required');
     else if (!isValidEmail(email)) errors.email = t('auth.fieldErrors.email_invalid');
+
+    // Sıfırlama isteğinde parola alanı yok — yalnızca e-posta gerekir.
+    if (mode === 'forgot') return errors;
 
     if (password.length === 0) {
       errors.password = t('auth.fieldErrors.password_required');
@@ -120,6 +124,13 @@ export function AuthScreen({ onAuthenticated }: Props) {
 
     setBusy(true);
     try {
+      if (mode === 'forgot') {
+        // Hesap var mı yok mu belli olmasın diye sunucu her zaman 204 döner —
+        // burada da her durumda "gönderildi" mesajı gösteriyoruz.
+        await api.post('/auth/request-password-reset', { email });
+        setResetSent(true);
+        return;
+      }
       const path = mode === 'login' ? '/auth/login' : '/auth/register';
       const body = mode === 'login' ? { email, password } : { email, password, username };
       const result = await api.post<{ user: SelfUser }>(path, body);
@@ -148,75 +159,119 @@ export function AuthScreen({ onAuthenticated }: Props) {
           <WalrusLoader />
         </div>
         <h1 className="mb-1 text-center text-2xl font-semibold">
-          {mode === 'login' ? t('auth.loginTitle') : t('auth.registerTitle')}
+          {mode === 'login' ? t('auth.loginTitle') : mode === 'register' ? t('auth.registerTitle') : t('auth.resetRequestTitle')}
         </h1>
-        <p className="mb-6 text-center text-sm text-[var(--color-ink-muted)]">{t('app.name')}</p>
+        <p className="mb-6 text-center text-sm text-[var(--color-ink-muted)]">
+          {mode === 'forgot' ? t('auth.resetRequestSubtitle') : t('app.name')}
+        </p>
 
-        {mode === 'register' && (
-          <Field
-            label={t('auth.username')}
-            value={username}
-            error={fieldErrors.username}
-            onChange={(v) => change('username', v, setUsername)}
-            autoComplete="username"
-          />
-        )}
-        <Field
-          label={t('auth.email')}
-          type="email"
-          value={email}
-          error={fieldErrors.email}
-          onChange={(v) => change('email', v, setEmail)}
-          autoComplete="email"
-        />
-        <Field
-          label={t('auth.password')}
-          type={showPassword ? 'text' : 'password'}
-          value={password}
-          error={fieldErrors.password}
-          onChange={(v) => change('password', v, setPassword)}
-          autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-          adornment={
+        {mode === 'forgot' && resetSent ? (
+          <>
+            <p role="status" className="mb-4 text-center text-sm text-[var(--color-online)]">
+              {t('auth.resetRequestSent')}
+            </p>
             <button
               type="button"
-              // Parola alanı odaktayken göze basmasın diye tabIndex dışı:
-              // klavye kullanıcısı Tab ile parolayı geçip butona takılmasın.
-              tabIndex={-1}
-              onClick={() => setShowPassword(!showPassword)}
-              aria-label={showPassword ? t('auth.hidePassword') : t('auth.showPassword')}
-              aria-pressed={showPassword}
-              className="absolute inset-y-0 right-0 flex items-center px-3 text-[var(--color-ink-muted)] transition hover:text-[var(--color-ink)]"
+              onClick={() => {
+                setMode('login');
+                setResetSent(false);
+              }}
+              className="w-full rounded bg-[var(--color-brand)] px-4 py-2 font-medium text-black transition hover:bg-[var(--color-brand-strong)]"
             >
-              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              {t('auth.backToLogin')}
             </button>
-          }
-        />
+          </>
+        ) : (
+          <>
+            {mode === 'register' && (
+              <Field
+                label={t('auth.username')}
+                value={username}
+                error={fieldErrors.username}
+                onChange={(v) => change('username', v, setUsername)}
+                autoComplete="username"
+              />
+            )}
+            <Field
+              label={t('auth.email')}
+              type="email"
+              value={email}
+              error={fieldErrors.email}
+              onChange={(v) => change('email', v, setEmail)}
+              autoComplete="email"
+            />
+            {mode !== 'forgot' && (
+              <Field
+                label={t('auth.password')}
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                error={fieldErrors.password}
+                onChange={(v) => change('password', v, setPassword)}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                adornment={
+                  <button
+                    type="button"
+                    // Parola alanı odaktayken göze basmasın diye tabIndex dışı:
+                    // klavye kullanıcısı Tab ile parolayı geçip butona takılmasın.
+                    tabIndex={-1}
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? t('auth.hidePassword') : t('auth.showPassword')}
+                    aria-pressed={showPassword}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-[var(--color-ink-muted)] transition hover:text-[var(--color-ink)]"
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                }
+              />
+            )}
 
-        {formError && (
-          <p role="alert" className="mb-3 text-sm text-[var(--color-danger)]">
-            {formError}
-          </p>
+            {mode === 'login' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('forgot');
+                  setFieldErrors({});
+                  setFormError(null);
+                }}
+                className="-mt-2 mb-4 block text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              >
+                {t('auth.forgotPassword')}
+              </button>
+            )}
+
+            {formError && (
+              <p role="alert" className="mb-3 text-sm text-[var(--color-danger)]">
+                {formError}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={busy}
+              className="w-full rounded bg-[var(--color-brand)] px-4 py-2 font-medium text-black transition hover:bg-[var(--color-brand-strong)] disabled:opacity-50"
+            >
+              {busy
+                ? t('common.loading')
+                : mode === 'login'
+                  ? t('auth.login')
+                  : mode === 'register'
+                    ? t('auth.register')
+                    : t('auth.sendResetLink')}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMode(mode === 'register' ? 'login' : mode === 'forgot' ? 'login' : 'register');
+                setFieldErrors({});
+                setFormError(null);
+              }}
+              className="mt-4 w-full text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            >
+              {mode === 'login' ? t('auth.needAccount') : mode === 'register' ? t('auth.haveAccount') : t('auth.backToLogin')}
+            </button>
+          </>
         )}
-
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded bg-[var(--color-brand)] px-4 py-2 font-medium text-black transition hover:bg-[var(--color-brand-strong)] disabled:opacity-50"
-        >
-          {busy ? t('common.loading') : mode === 'login' ? t('auth.login') : t('auth.register')}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === 'login' ? 'register' : 'login');
-            setFieldErrors({});
-            setFormError(null);
-          }}
-          className="mt-4 w-full text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-        >
-          {mode === 'login' ? t('auth.needAccount') : t('auth.haveAccount')}
-        </button>
 
         <LegalFooter />
       </form>

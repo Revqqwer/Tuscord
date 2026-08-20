@@ -8,6 +8,7 @@
 
 import type {
   APIAttachment,
+  APIBotApplication,
   APIChannel,
   APIGuild,
   APIGuildMember,
@@ -19,7 +20,7 @@ import type {
   PublicUser,
   SelfUser,
 } from '@tuscord/shared';
-import type { Attachment, Channel, Guild, Message, Role, User } from '../db/schema.js';
+import type { Attachment, BotApplication, Channel, Guild, Message, Role, User } from '../db/schema.js';
 import type { SessionUser } from '../auth/session.js';
 import { storage } from './storage.js';
 
@@ -62,6 +63,16 @@ export function toAPIGuild(guild: Guild): APIGuild {
     description: guild.description,
     systemChannelId: guild.systemChannelId?.toString() ?? null,
     createdAt: guild.createdAt.toISOString(),
+  };
+}
+
+export function toAPIBotApplication(app: BotApplication, botUser: User): APIBotApplication {
+  return {
+    id: app.id.toString(),
+    ownerId: app.ownerId.toString(),
+    name: app.name,
+    botUser: toPublicUser(botUser),
+    createdAt: app.createdAt.toISOString(),
   };
 }
 

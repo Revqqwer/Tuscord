@@ -43,6 +43,20 @@
       "when": 1787005000000,
       "tag": "0005_blocks",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787076779028,
+      "tag": "0006_graceful_smasher",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787124135582,
+      "tag": "0007_cool_radioactive_man",
+      "breakpoints": true
     }
   ]
 }

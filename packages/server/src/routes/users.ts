@@ -19,9 +19,9 @@ import {
 import { Errors } from '../lib/errors.js';
 import { nextId } from '../lib/id.js';
 import { userId } from '../app.js';
-import { destroyAllSessions } from '../auth/session.js';
+import { forceLogoutUser } from '../auth/session.js';
 import { loadPrivateChannels } from '../services/privateChannels.js';
-import { publishToUsers } from '../services/events.js';
+import { publishToGuild, publishToUsers } from '../services/events.js';
 import { toAPIChannel, toAPIGuild, toPublicUser, toSelfUser } from '../services/serialize.js';
 import { detectFileType } from '../services/fileType.js';
 import { generateObjectKey, storage } from '../services/storage.js';
@@ -295,7 +295,15 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
-    await db
+    // Üye olduğum sunucuları anonimleştirmeden ÖNCE topla — diğer üyelerin
+    // ekranı canlı güncellensin diye (bkz. kullanıcı raporu: "sunucusundaki
+    // kullanıcılar sayfalarını restart edene kadar görmeye devam ediyor").
+    const memberships = await db
+      .select({ guildId: guildMembers.guildId })
+      .from(guildMembers)
+      .where(eq(guildMembers.userId, me));
+
+    const [updated] = await db
       .update(users)
       .set({
         deletedAt: new Date(),
@@ -307,10 +315,24 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
         bio: null,
         mfaSecret: null,
       })
-      .where(eq(users.id, me));
+      .where(eq(users.id, me))
+      .returning();
 
     await db.delete(guildMembers).where(eq(guildMembers.userId, me));
-    await destroyAllSessions(me);
+
+    await Promise.all(
+      memberships.map(({ guildId }) =>
+        publishToGuild({
+          guildId: guildId.toString(),
+          event: GatewayEvent.GUILD_MEMBER_REMOVE,
+          payload: { guildId: guildId.toString(), user: toPublicUser(updated!) },
+        }),
+      ),
+    );
+
+    // Kendi kendini sildiği için istemcisi zaten cevaptan sonra çıkış yapar
+    // (bkz. UserSettings.tsx) — yine de gateway'e bağlıysa anında koparalım.
+    await forceLogoutUser(me, 'account_deleted');
 
     return reply.status(204).send();
   });

@@ -10,6 +10,7 @@ import { Limits, guildNameError, type APIGuild } from '@tuscord/shared';
 import { api } from '../lib/api';
 import { useStore, type GuildState } from '../store';
 import { Avatar } from './Avatar';
+import { initialsFromName } from '../lib/initials';
 
 interface Props {
   guildState: GuildState;
@@ -128,7 +129,7 @@ export function ServerSettings({ guildState, onClose }: Props) {
           {/* İkon + ad */}
           <div className="flex items-center gap-4">
             <button type="button" onClick={() => iconInput.current?.click()} className="group relative" title={t('serverSettings.changeImage')}>
-              <Avatar name={name} avatarUrl={iconUrl} size={64} />
+              <Avatar name={name} avatarUrl={iconUrl} size={64} initials={initialsFromName(name)} />
               <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 text-white opacity-0 transition group-hover:opacity-100">
                 <Camera size={20} />
               </span>

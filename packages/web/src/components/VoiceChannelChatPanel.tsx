@@ -73,6 +73,30 @@ export function VoiceChannelChatPanel({
     };
   }, [channelId, setMessages]);
 
+  /**
+   * Panel açıkken okundu işaretle — ChatShell.tsx'teki ana kanal ack
+   * effect'iyle AYNI mantık, kasıtlı olarak burada tekrarlanıyor: bu panel
+   * ana kanaldan bağımsız açık kalabiliyor, global activeChannelId'ye
+   * dokunmuyor (bkz. dosya başı yorumu). Bu effect olmadan ses kanalının
+   * sohbeti asla okundu sayılmaz, rozet hep takılı kalır.
+   */
+  const lastMessageId = messages[messages.length - 1]?.id ?? null;
+  useEffect(() => {
+    if (!lastMessageId) return;
+    const acknowledge = () => {
+      if (document.visibilityState !== 'visible') return;
+      const known = useStore.getState().readStates.get(channelId);
+      if (known?.lastReadMessageId === lastMessageId && known.mentionCount === 0) return;
+
+      useStore.getState().markRead(channelId, lastMessageId);
+      void api.post(`/channels/${channelId}/ack`, { messageId: lastMessageId }).catch(() => undefined);
+    };
+
+    acknowledge();
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => document.removeEventListener('visibilitychange', acknowledge);
+  }, [channelId, lastMessageId]);
+
   async function loadOlder() {
     const oldest = messages[0];
     if (!oldest) return;

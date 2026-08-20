@@ -39,6 +39,9 @@ export const Limits = {
   ROLES_PER_GUILD: 100,
   REACTIONS_PER_MESSAGE: 20,
   GROUP_DM_RECIPIENTS_MAX: 10,
+
+  BOT_APPS_PER_USER: 25,
+  BOT_NAME_MAX: 32,
 } as const;
 
 /**

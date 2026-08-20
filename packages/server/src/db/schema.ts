@@ -14,6 +14,7 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -110,6 +111,37 @@ export const verificationTokens = pgTable(
   (t) => [
     uniqueIndex('verification_tokens_hash_key').on(t.tokenHash),
     index('verification_tokens_user_idx').on(t.userId, t.purpose),
+  ],
+);
+
+/**
+ * Bot uygulaması — Discord'daki "Application" karşılığı.
+ *
+ * `ownerId`: uygulamayı yöneten (token'ı gören) insan kullanıcı.
+ * `botUserId`: `users` tablosunda `isBot: true` olan ayrı bir satır — bot bir
+ * sunucuya bu kimlikle NORMAL BİR ÜYE gibi eklenir (guild_members satırı),
+ * mevcut rol/izin sistemi hiç değişmeden çalışır. Uygulama silinince bot
+ * kullanıcısı da silinir (onDelete cascade), guild_members'tan da düşer.
+ */
+export const botApplications = pgTable(
+  'bot_applications',
+  {
+    id: snowflake('id').primaryKey(),
+    ownerId: snowflake('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    botUserId: snowflake('bot_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 32 }).notNull(),
+    /** Ham bot token'ı asla saklanmaz — yalnızca SHA-256 özeti (bkz. sessions.tokenHash). */
+    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('bot_applications_bot_user_id_key').on(t.botUserId),
+    uniqueIndex('bot_applications_token_hash_key').on(t.tokenHash),
+    index('bot_applications_owner_idx').on(t.ownerId),
   ],
 );
 
@@ -533,10 +565,23 @@ export const trafficLogs = pgTable(
   ],
 );
 
+/**
+ * Gün başına en yüksek eşzamanlı aktif (gateway'e bağlı) kullanıcı sayısı —
+ * admin panelindeki "Genel bakış" sekmesi için (bkz. services/activeUserPeaks.ts).
+ * Tüm zamanların rekoru, bu tablodaki TÜM satırların MAX'ı olarak hesaplanır
+ * — ayrı bir "all time" satırı tutmaya gerek yok, geçmiş günler zaten burada.
+ */
+export const activeUserPeaks = pgTable('active_user_peaks', {
+  day: date('day').primaryKey(),
+  peak: integer('peak').notNull().default(0),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+
 /* ------------------------------------------------------------------ */
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type BotApplication = typeof botApplications.$inferSelect;
 export type Guild = typeof guilds.$inferSelect;
 export type Role = typeof roles.$inferSelect;
 export type GuildMember = typeof guildMembers.$inferSelect;
@@ -546,3 +591,4 @@ export type Attachment = typeof attachments.$inferSelect;
 export type Invite = typeof invites.$inferSelect;
 export type Report = typeof reports.$inferSelect;
 export type AuditLogRow = typeof auditLog.$inferSelect;
+export type ActiveUserPeak = typeof activeUserPeaks.$inferSelect;

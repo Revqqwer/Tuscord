@@ -8,16 +8,35 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Camera, LogOut, UserX, X } from 'lucide-react';
+import { Camera, Download, Headphones, LogOut, Mic, UserX, Volume2, X } from 'lucide-react';
 import { Limits, type SelfUser } from '@tuscord/shared';
 import { ApiError, api } from '../lib/api';
 import { useStore } from '../store';
 import { setLocale } from '../i18n';
+import { voice, playTestTone, startMicLevelMeter } from '../lib/voice';
+import { gateway } from '../lib/gateway';
 import { Avatar } from './Avatar';
 
 interface Props {
   user: SelfUser;
   onClose: () => void;
+}
+
+/** `KeyboardEvent.code` → okunur ad. Bilinmeyen kodlar olduğu gibi gösterilir. */
+const KEY_CODE_LABELS: Record<string, string> = {
+  ControlRight: 'Sağ Ctrl',
+  ControlLeft: 'Sol Ctrl',
+  AltRight: 'Sağ Alt',
+  AltLeft: 'Sol Alt',
+  ShiftRight: 'Sağ Shift',
+  ShiftLeft: 'Sol Shift',
+  Space: 'Boşluk',
+  CapsLock: 'Caps Lock',
+  Backquote: '`',
+  Tab: 'Tab',
+};
+function formatKeyCode(code: string): string {
+  return KEY_CODE_LABELS[code] ?? code.replace(/^Key/, '').replace(/^Digit/, '');
 }
 
 export function UserSettings({ user, onClose }: Props) {
@@ -46,6 +65,96 @@ export function UserSettings({ user, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const displayed = displayName.trim() || user.username;
+
+  /* -------- Ses ayarları (bkz. dosya başındaki yorum: hassasiyet, cihaz seçimi, test, gürültü engelleme) -------- */
+  const inputSensitivity = useStore((s) => s.inputSensitivity);
+  const outputVolume = useStore((s) => s.outputVolume);
+  const noiseSuppression = useStore((s) => s.noiseSuppression);
+  const inputDeviceId = useStore((s) => s.inputDeviceId);
+  const outputDeviceId = useStore((s) => s.outputDeviceId);
+  const setInputSensitivity = useStore((s) => s.setInputSensitivity);
+  const pushToTalk = useStore((s) => s.pushToTalk);
+  const pushToTalkKey = useStore((s) => s.pushToTalkKey);
+  const messageSounds = useStore((s) => s.messageSounds);
+  const invisible = useStore((s) => s.invisible);
+  const setMessageSounds = useStore((s) => s.setMessageSounds);
+  const [listeningForKey, setListeningForKey] = useState(false);
+
+  // Tuş yakalama: "Tuşu değiştir"e basınca bir sonraki tuşa basılışı dinle.
+  useEffect(() => {
+    if (!listeningForKey) return;
+    function onKeyDown(e: KeyboardEvent) {
+      e.preventDefault();
+      if (e.key === 'Escape') {
+        setListeningForKey(false);
+        return;
+      }
+      voice.setPushToTalkKey(e.code);
+      setListeningForKey(false);
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
+  }, [listeningForKey]);
+
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [micTesting, setMicTesting] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
+  const [speakerTesting, setSpeakerTesting] = useState(false);
+  const micStopRef = useRef<(() => void) | null>(null);
+
+  async function refreshDevices() {
+    const list = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    setDevices(list);
+  }
+
+  useEffect(() => {
+    void refreshDevices();
+    navigator.mediaDevices.addEventListener?.('devicechange', refreshDevices);
+    return () => navigator.mediaDevices.removeEventListener?.('devicechange', refreshDevices);
+  }, []);
+
+  // Cihaz etiketleri (label) izin verilene kadar boş gelir — kısa bir
+  // getUserMedia isteğiyle izni tetikleyip akışı hemen kapatıyoruz.
+  async function requestDeviceLabels() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+    } catch {
+      // Reddedildi — cihaz listesi id'lerle (etiketsiz) kalır.
+    }
+    await refreshDevices();
+  }
+
+  const inputDevices = devices.filter((d) => d.kind === 'audioinput');
+  const outputDevices = devices.filter((d) => d.kind === 'audiooutput');
+  const labelsHidden = devices.length > 0 && devices.every((d) => !d.label);
+
+  async function toggleMicTest() {
+    if (micTesting) {
+      micStopRef.current?.();
+      micStopRef.current = null;
+      setMicTesting(false);
+      setMicLevel(0);
+      return;
+    }
+    try {
+      micStopRef.current = await startMicLevelMeter(inputDeviceId, (rms) =>
+        setMicLevel(Math.min(1, rms * 4)),
+      );
+      setMicTesting(true);
+    } catch {
+      // Mikrofon izni reddedildi — sessizce geç.
+    }
+  }
+
+  async function testSpeaker() {
+    setSpeakerTesting(true);
+    await playTestTone(outputDeviceId);
+    setTimeout(() => setSpeakerTesting(false), 700);
+  }
+
+  // Bileşen kapanırken mikrofon testi açık kaldıysa akışı durdur.
+  useEffect(() => () => micStopRef.current?.(), []);
 
   async function save() {
     setBusy(true);
@@ -102,6 +211,24 @@ export function UserSettings({ user, onClose }: Props) {
   async function logout() {
     await api.post('/auth/logout').catch(() => undefined);
     location.reload();
+  }
+
+  /**
+   * "Parolayı değiştir" — inline eski/yeni parola formu YOK, aynı sıfırlama
+   * e-postası akışı kullanılıyor (bkz. AuthScreen.tsx "Parolamı unuttum" ile
+   * AYNI sunucu ucu: `/auth/request-password-reset`). Kullanıcı raporu:
+   * "şifre değiştirme linki maile gitsin ve işlem oradan devam etsin".
+   */
+  const [changePasswordSent, setChangePasswordSent] = useState(false);
+  const [changePasswordBusy, setChangePasswordBusy] = useState(false);
+  async function requestPasswordChange() {
+    setChangePasswordBusy(true);
+    try {
+      await api.post('/auth/request-password-reset', { email: user.email });
+      setChangePasswordSent(true);
+    } finally {
+      setChangePasswordBusy(false);
+    }
   }
 
   async function exportData() {
@@ -248,6 +375,188 @@ export function UserSettings({ user, onClose }: Props) {
             </div>
           </Field>
 
+          {/* Ses ayarları: cihaz seçimi + test, hassasiyet/seviye, gürültü engelleme */}
+          <div className="border-t border-[var(--color-line)] pt-4">
+            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              {t('profile.voice.title')}
+            </div>
+
+            {labelsHidden && (
+              <button
+                type="button"
+                onClick={() => void requestDeviceLabels()}
+                className="mb-3 w-full rounded border border-dashed border-[var(--color-line)] px-3 py-2 text-left text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]"
+              >
+                {t('profile.voice.grantDeviceAccess')}
+              </button>
+            )}
+
+            <Field label={t('profile.voice.inputDevice')}>
+              <div className="flex gap-2">
+                <select
+                  value={inputDeviceId ?? ''}
+                  onChange={(e) => void voice.setInputDevice(e.target.value || null)}
+                  className="w-full rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 text-sm outline-none focus:border-[var(--color-brand)]"
+                >
+                  <option value="">{t('profile.voice.systemDefault')}</option>
+                  {inputDevices.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || t('profile.voice.unnamedDevice')}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void toggleMicTest()}
+                  className={`flex shrink-0 items-center gap-1.5 rounded px-3 py-2 text-sm ${
+                    micTesting
+                      ? 'bg-[var(--color-danger)]/15 text-[var(--color-danger)]'
+                      : 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]'
+                  }`}
+                >
+                  <Mic size={14} />
+                  {micTesting ? t('profile.voice.stopTest') : t('profile.voice.testMic')}
+                </button>
+              </div>
+              {micTesting && (
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+                  <div
+                    className="h-full rounded-full bg-[var(--color-online)] transition-[width]"
+                    style={{ width: `${Math.round(micLevel * 100)}%` }}
+                  />
+                </div>
+              )}
+            </Field>
+
+            <div className="mt-3">
+              <Field label={t('profile.voice.outputDevice')}>
+                <div className="flex gap-2">
+                  <select
+                    value={outputDeviceId ?? ''}
+                    onChange={(e) => voice.setOutputDevice(e.target.value || null)}
+                    className="w-full rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 text-sm outline-none focus:border-[var(--color-brand)]"
+                  >
+                    <option value="">{t('profile.voice.systemDefault')}</option>
+                    {outputDevices.map((d) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.label || t('profile.voice.unnamedDevice')}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => void testSpeaker()}
+                    disabled={speakerTesting}
+                    className="flex shrink-0 items-center gap-1.5 rounded bg-[var(--color-surface-3)] px-3 py-2 text-sm text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] disabled:opacity-50"
+                  >
+                    <Headphones size={14} /> {t('profile.voice.testSpeaker')}
+                  </button>
+                </div>
+              </Field>
+            </div>
+
+            <div className="mt-3">
+              <Field label={t('profile.voice.inputSensitivity', { percent: inputSensitivity })}>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={inputSensitivity}
+                  onChange={(e) => setInputSensitivity(Number(e.target.value))}
+                  className="w-full accent-[var(--color-brand)]"
+                />
+              </Field>
+            </div>
+
+            <div className="mt-3">
+              <Field label={t('profile.voice.outputVolume', { percent: outputVolume })}>
+                <div className="flex items-center gap-2">
+                  <Volume2 size={16} className="shrink-0 text-[var(--color-ink-muted)]" />
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={outputVolume}
+                    onChange={(e) => voice.setOutputVolume(Number(e.target.value))}
+                    className="w-full accent-[var(--color-brand)]"
+                  />
+                </div>
+              </Field>
+            </div>
+
+            <label className="mt-3 flex items-center justify-between gap-2 rounded bg-[var(--color-surface-2)] px-3 py-2">
+              <span className="text-sm">{t('profile.voice.noiseSuppression')}</span>
+              <input
+                type="checkbox"
+                checked={noiseSuppression}
+                onChange={(e) => voice.setNoiseSuppression(e.target.checked)}
+                className="h-4 w-4 accent-[var(--color-brand)]"
+              />
+            </label>
+
+            {/* Bas-konuş — sidebardaki klavye ikonuyla AYNI ayar (bkz.
+                ChatShell.tsx alt kullanıcı çubuğu), burada tuş de değişir. */}
+            <label className="mt-3 flex items-center justify-between gap-2 rounded bg-[var(--color-surface-2)] px-3 py-2">
+              <span className="text-sm">{t('voice.pushToTalk')}</span>
+              <input
+                type="checkbox"
+                checked={pushToTalk}
+                onChange={(e) => voice.setPushToTalk(e.target.checked)}
+                className="h-4 w-4 accent-[var(--color-brand)]"
+              />
+            </label>
+            {pushToTalk && (
+              <div className="mt-2 flex items-center justify-between gap-2 rounded bg-[var(--color-surface-2)] px-3 py-2">
+                <span className="text-sm text-[var(--color-ink-muted)]">{t('voice.pushToTalkKey')}</span>
+                <button
+                  type="button"
+                  onClick={() => setListeningForKey(true)}
+                  className="rounded bg-[var(--color-surface-3)] px-3 py-1 text-sm font-medium hover:bg-[var(--color-surface-1)]"
+                >
+                  {listeningForKey ? t('voice.pushToTalkKeyListening') : formatKeyCode(pushToTalkKey)}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Bildirimler */}
+          <div className="border-t border-[var(--color-line)] pt-4">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              {t('profile.notifications.title')}
+            </div>
+            <label className="flex items-center justify-between gap-2 rounded bg-[var(--color-surface-2)] px-3 py-2">
+              <span className="text-sm">{t('profile.notifications.messageSounds')}</span>
+              <input
+                type="checkbox"
+                checked={messageSounds}
+                onChange={(e) => setMessageSounds(e.target.checked)}
+                className="h-4 w-4 accent-[var(--color-brand)]"
+              />
+            </label>
+            <p className="mt-1.5 px-1 text-xs text-[var(--color-ink-faint)]">
+              {t('profile.notifications.messageSoundsHint')}
+            </p>
+          </div>
+
+          {/* Gizlilik */}
+          <div className="border-t border-[var(--color-line)] pt-4">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              {t('profile.privacy.title')}
+            </div>
+            <label className="flex items-center justify-between gap-2 rounded bg-[var(--color-surface-2)] px-3 py-2">
+              <span className="text-sm">{t('profile.privacy.invisible')}</span>
+              <input
+                type="checkbox"
+                checked={invisible}
+                onChange={(e) => gateway.setInvisible(e.target.checked)}
+                className="h-4 w-4 accent-[var(--color-brand)]"
+              />
+            </label>
+            <p className="mt-1.5 px-1 text-xs text-[var(--color-ink-faint)]">
+              {t('profile.privacy.invisibleHint')}
+            </p>
+          </div>
+
           {/* Engellenen kullanıcılar */}
           <div className="border-t border-[var(--color-line)] pt-4">
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
@@ -284,6 +593,16 @@ export function UserSettings({ user, onClose }: Props) {
             )}
           </div>
 
+          {/* Masaüstü uygulaması — web arayüzüyle birebir aynı (bkz. packages/desktop). */}
+          <div className="border-t border-[var(--color-line)] pt-4">
+            <a
+              href="/downloads/Tuscord-Setup-0.1.4.exe"
+              className="flex items-center gap-1.5 rounded bg-[var(--color-surface-3)] px-3 py-1.5 text-sm hover:bg-[var(--color-surface-2)]"
+            >
+              <Download size={14} /> {t('profile.downloadDesktopApp')}
+            </a>
+          </div>
+
           {/* Hesap */}
           <div className="border-t border-[var(--color-line)] pt-4">
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
@@ -296,6 +615,14 @@ export function UserSettings({ user, onClose }: Props) {
               </span>
             </div>
             <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void requestPasswordChange()}
+                disabled={changePasswordBusy || changePasswordSent}
+                className="rounded bg-[var(--color-surface-3)] px-3 py-1.5 text-sm hover:bg-[var(--color-surface-2)] disabled:opacity-50"
+              >
+                {t('profile.changePassword')}
+              </button>
               <button
                 type="button"
                 onClick={() => void logout()}
@@ -318,6 +645,9 @@ export function UserSettings({ user, onClose }: Props) {
                 {t('profile.deleteAccount')}
               </button>
             </div>
+            {changePasswordSent && (
+              <p className="mt-2 text-sm text-[var(--color-online)]">{t('profile.changePasswordSent')}</p>
+            )}
           </div>
         </div>
       </div>

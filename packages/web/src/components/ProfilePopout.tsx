@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Ban, Check, Clock, UserPlus, X } from 'lucide-react';
-import type { APIBlock, APIFriendship, APIGuildMember, APIRole, PublicUser } from '@tuscord/shared';
+import type { APIBlock, APIFriendship, APIGuildMember, APIRole, PresenceStatus, PublicUser } from '@tuscord/shared';
 import { ApiError, api } from '../lib/api';
 import { useStore } from '../store';
 import { Avatar } from './Avatar';
@@ -26,7 +26,7 @@ interface Props {
   roles: APIRole[];
   /** Kendi profilin mi (o zaman "Mesaj gönder" gösterilmez). */
   isSelf: boolean;
-  status?: 'online' | 'idle' | 'dnd' | 'offline';
+  status?: PresenceStatus;
   /** Bu sunucunun id'si — rol atama uçları bunu gerektiriyor. */
   guildId?: string;
   /** ASSIGN_ROLES iznim var mı — varsa roller salt okunur rozet yerine

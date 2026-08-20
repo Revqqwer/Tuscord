@@ -30,6 +30,13 @@ export const PresenceStatus = {
   IDLE: 'idle',
   DND: 'dnd',
   OFFLINE: 'offline',
+  /**
+   * Yalnızca istemciden sunucuya GİDER (bkz. IdentifyPayload/PRESENCE_UPDATE
+   * op'u) — başkalarına ASLA bu değerle yayınlanmaz, sunucu bunu 'offline'a
+   * çevirip yayınlar (bkz. server gateway/index.ts setPresence). Kendi
+   * istemcim "görünmez" seçtiğimi bilir, başkaları çevrimdışı görür.
+   */
+  INVISIBLE: 'invisible',
 } as const;
 export type PresenceStatus = (typeof PresenceStatus)[keyof typeof PresenceStatus];
 
@@ -51,6 +58,25 @@ export interface SelfUser extends PublicUser {
   locale: string;
   /** Platform yöneticisi mi — admin panelini yalnızca buna göster. */
   isAdmin: boolean;
+}
+
+/**
+ * Bot uygulaması — Discord'daki "Application" karşılığı. Bir insan
+ * kullanıcı bunu yönetir (`ownerId`); arkasındaki gerçek kimlik ise ayrı,
+ * `isBot: true` bir kullanıcı satırıdır (`botUser`) — sunucuya normal bir
+ * üye gibi eklenir, mesaj/izin sistemi hiç değişmeden çalışır.
+ */
+export interface APIBotApplication {
+  id: Snowflake;
+  ownerId: Snowflake;
+  name: string;
+  botUser: PublicUser;
+  createdAt: string;
+}
+
+/** Bot oluşturma/token yenileme cevabı — ham token yalnızca BURADA, bir kez döner. */
+export interface APIBotApplicationWithToken extends APIBotApplication {
+  token: string;
 }
 
 export interface APIRole {
