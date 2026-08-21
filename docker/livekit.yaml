@@ -1,0 +1,16 @@
+# LiveKit self-host konfigürasyonu (tek node).
+#
+# Anahtarlar BURADA yok — LIVEKIT_KEYS ortam değişkeniyle geliyor (bkz.
+# compose.livekit.yml), .env'deki LIVEKIT_API_KEY/LIVEKIT_API_SECRET'tan.
+#
+# port_range: WebRTC medya (ICE/RTP) buradan geçer, Cloudflare Tunnel UDP
+# taşımadığı için bu port aralığı VPS güvenlik duvarında DOĞRUDAN açık olmalı
+# (bkz. ufw). Sinyal (7880, WS/HTTP) ise ayrı bir Caddy + doğrudan 80/443 ile
+# kendi TLS sertifikasını alıyor (bkz. Caddyfile.livekit) — ana tuscord.com
+# tünelinden bağımsız, ona dokunmuyor.
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true

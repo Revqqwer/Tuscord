@@ -119,7 +119,7 @@ export function MessageList({
   }
 
   return (
-    <div ref={parentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4">
+    <div ref={parentRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto px-4">
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const message = messages[virtualRow.index];

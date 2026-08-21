@@ -172,7 +172,8 @@ export function ChatShell() {
    * yorumu — eskiden ikisi hep birlikte gösteriliyordu, kullanıcı bunu
    * "bölünmüş" bulup değiştirilmesini istedi).
    */
-  const [focusedPresenterId, setFocusedPresenterId] = useState<string | null>(null);
+  const focusedPresenterId = store.focusedPresenterId;
+  const setFocusedPresenterId = store.setFocusedPresenterId;
 
   // Bana gelen bekleyen arkadaşlık istekleri (alt çubuktaki rozet).
   const pendingRequests = store.friends.filter(
@@ -513,7 +514,7 @@ export function ChatShell() {
         />
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col bg-[var(--color-surface-0)]">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-surface-0)]">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--color-line)] px-4">
           <button
             type="button"

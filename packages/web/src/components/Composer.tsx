@@ -2,7 +2,7 @@
  * Mesaj yazma alanı: metin, dosya ekleme, sürükle-bırak, yazıyor göstergesi.
  */
 
-import { useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Paperclip, SendHorizontal, X } from 'lucide-react';
 import { Limits, type APIAttachment, type APIMessage } from '@tuscord/shared';
@@ -64,6 +64,11 @@ export function Composer({
    * sunucunun beklediği `<@id>` biçimine çevrilir.
    */
   const picked = useRef<Array<{ label: string; id: string }>>([]);
+
+  // Reply'a tıklayınca yazma alanına elle tıklamaya gerek kalmadan odaklan.
+  useEffect(() => {
+    if (replyTo) textarea.current?.focus();
+  }, [replyTo]);
 
   const mentionMatches =
     mentionQuery === null
