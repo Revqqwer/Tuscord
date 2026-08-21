@@ -5,6 +5,7 @@
 import type { FastifyInstance } from 'fastify';
 import { and, count, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { AccessToken } from 'livekit-server-sdk';
 import {
   ChannelType,
   GatewayEvent,
@@ -14,6 +15,7 @@ import {
   isValidChannelSticker,
   normalizeChannelName,
 } from '@tuscord/shared';
+import { env } from '../env.js';
 import { db } from '../db/index.js';
 import { channels, guildMembers, memberRoles, permissionOverwrites } from '../db/schema.js';
 import { Errors } from '../lib/errors.js';
@@ -299,6 +301,44 @@ export async function channelRoutes(app: FastifyInstance): Promise<void> {
       channelId: channelId.toString(),
     });
     return reply.status(204).send();
+  });
+
+  /* ---------------- Ses (LiveKit) ---------------- */
+
+  /**
+   * Bu sesli kanala bağlanmak için LiveKit erişim token'ı. Oda adı = kanal
+   * id'si (1 sesli kanal = 1 LiveKit odası). CONNECT izni yoksa 403 —
+   * istemci bunu `voice.ts` `join()` içinde, gerçek katılmadan HEMEN önce
+   * ister (kısa ömürlü token, her katılışta yeniden alınır).
+   */
+  app.post('/channels/:channelId/voice-token', async (request, reply) => {
+    const me = userId(request);
+    const channelId = snowflakeParam(request.params, 'channelId');
+    const access = await requireChannelAccess(channelId, me);
+    if (access.channel.type !== ChannelType.GUILD_VOICE) {
+      throw Errors.badRequest('not_voice_channel', 'Bu bir sesli kanal değil');
+    }
+    assertPermission(access.permissions, Permission.CONNECT);
+
+    if (!env.LIVEKIT_API_KEY || !env.LIVEKIT_API_SECRET || !env.LIVEKIT_URL) {
+      throw Errors.badRequest('voice_not_configured', 'Sesli sohbet henüz yapılandırılmadı');
+    }
+
+    const canSpeak = (access.permissions & Permission.SPEAK) === Permission.SPEAK;
+    const at = new AccessToken(env.LIVEKIT_API_KEY, env.LIVEKIT_API_SECRET, {
+      identity: me.toString(),
+      ttl: '10m',
+    });
+    at.addGrant({
+      room: channelId.toString(),
+      roomJoin: true,
+      canPublish: canSpeak,
+      // Ekran paylaşımı da SPEAK'e bağlı — ayrı bir izin yok, mikrofonla aynı kapı.
+      canPublishData: false,
+      canSubscribe: true,
+    });
+
+    return reply.send({ token: await at.toJwt(), url: env.LIVEKIT_URL });
   });
 
   /* ---------------- İzin overwrite'ları ---------------- */

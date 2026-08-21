@@ -31,10 +31,17 @@ function beep(c: AudioContext, freq: number, start: number, duration: number): v
   osc.stop(start + duration + 0.02);
 }
 
-export function playVoiceChime(kind: 'join' | 'leave'): void {
+export function playVoiceChime(kind: 'join' | 'leave' | 'live'): void {
   try {
     const c = ctx();
     if (c.state === 'suspended') void c.resume();
+    if (kind === 'live') {
+      // Canlı yayın başladı: kısa, tiz üç nota — katılma/ayrılmadan net ayrılsın.
+      beep(c, 587, c.currentTime, 0.07);
+      beep(c, 784, c.currentTime + 0.07, 0.07);
+      beep(c, 988, c.currentTime + 0.14, 0.12);
+      return;
+    }
     // Katılma: yukarı iki nota (A4→E5). Ayrılma: aşağı iki nota (C5→F#4) — kulakla ayırt edilsin diye.
     const [f1, f2] = kind === 'join' ? [440, 660] : [523, 370];
     beep(c, f1, c.currentTime, 0.09);

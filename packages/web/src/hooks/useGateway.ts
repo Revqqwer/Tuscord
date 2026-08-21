@@ -17,7 +17,6 @@ import {
   type VoiceForceDisconnectPayload,
   type VoiceForceMovePayload,
   type VoiceForceMutePayload,
-  type VoiceSignalPayload,
   type VoiceStateUpdatePayload,
 } from '@tuscord/shared';
 import { gateway } from '../lib/gateway';
@@ -197,11 +196,9 @@ export function useGateway(enabled: boolean): void {
             selfDeaf: data.selfDeaf,
             selfVideo: data.selfVideo,
           });
-          voice.onVoiceState(data);
-          break;
-        }
-        case GatewayEvent.VOICE_SIGNAL: {
-          void voice.onSignal(payload as VoiceSignalPayload);
+          // Eş bağlantı yönetimi artık burada YOK — LiveKit kendi odasını
+          // kendi bağlantısı üzerinden yönetiyor (bkz. voice.ts dosya başı
+          // yorumu). Bu olay yalnızca roster (yukarısı) için kullanılıyor.
           break;
         }
         case GatewayEvent.VOICE_FORCE_MUTE: {

@@ -1,0 +1,12 @@
+# LiveKit sinyal ucu için ayrı Caddy — ana tuscord.com tünelinden bağımsız.
+#
+# livekit.tuscord.com DOĞRUDAN bu VPS'in IP'sine çözülmeli (Cloudflare'de
+# DNS-only / gri bulut, proxied DEĞİL) — WebRTC sinyal + ICE trafiği
+# Cloudflare'in proxy katmanından geçemez. Bu yüzden bu Caddy kendi TLS
+# sertifikasını Let's Encrypt'ten alıyor (auto_https açık, varsayılan).
+
+livekit.tuscord.com {
+	# host network mode'da olduğumuz için livekit servisine container adıyla
+	# değil, localhost üzerinden ulaşılıyor (bkz. compose.livekit.yml).
+	reverse_proxy 127.0.0.1:7880
+}

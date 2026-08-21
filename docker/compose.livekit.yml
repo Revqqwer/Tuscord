@@ -1,0 +1,38 @@
+# LiveKit self-host — ana yığına EK, compose.tunnel.yml'e dokunmuyor.
+#
+#   docker compose --env-file .env -f docker/compose.tunnel.yml -f docker/compose.livekit.yml up -d
+#
+# Gerekenler (.env): LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+#
+# Dışarıya YENİ açılan portlar (compose.tunnel.yml'in "hiçbir port açılmaz"
+# ilkesinin TEK istisnası — WebRTC medyası Cloudflare Tunnel'dan geçemez):
+#   80, 443 (livekit-caddy — yalnızca livekit.tuscord.com için TLS)
+#   7881/tcp, 50000-60000/udp (livekit — ICE/RTP medya)
+
+services:
+  # host network mode: 50000-60000/udp'yi Docker'ın userland-proxy'sinden tek
+  # tek geçirmeye çalışmak (binlerce ayrı docker-proxy süreci) donuyor/çöküyor
+  # — LiveKit'in kendi önerisi de zaten bu, bkz. resmi self-host dokümanı.
+  # Bu yüzden hem livekit hem önündeki caddy doğrudan host ağını kullanıyor.
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    network_mode: host
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+
+  livekit-caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile.livekit:/etc/caddy/Caddyfile:ro
+      - livekit_caddy_data:/data
+    depends_on:
+      - livekit
+
+volumes:
+  livekit_caddy_data:

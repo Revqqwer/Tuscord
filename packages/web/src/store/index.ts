@@ -25,6 +25,7 @@ import type {
   VoiceStateUpdatePayload,
 } from '@tuscord/shared';
 import type { GatewayStatus } from '../lib/gateway';
+import { chimesSuppressed, playVoiceChime } from '../lib/voiceChime';
 import {
   loadChannelVolumes,
   loadInputDeviceId,
@@ -274,6 +275,22 @@ interface AppState {
   setScreenStream: (userId: Snowflake, stream: MediaStream | null) => void;
   /** Ses oturumunu tamamen sıfırla (ayrılırken). */
   resetVoiceSession: () => void;
+
+  /**
+   * VoiceStage'de büyük ekranda gösterilen sunucu (null → katılımcı ızgarası).
+   * Global'de tutuluyor ki başka bir metin kanalındayken bir kullanıcının
+   * "canlı" rozetine tıklamak, o ses kanalına gidip doğrudan o kişinin
+   * yayınına odaklanabilsin (bkz. VoiceChannel.tsx canlı rozeti).
+   */
+  focusedPresenterId: Snowflake | null;
+  setFocusedPresenterId: (userId: Snowflake | null) => void;
+  /**
+   * Henüz akışı elimize ulaşmamış birine odaklanma isteği (WebRTC el
+   * sıkışması bitene kadar) — dışarıdan okunmaz, yalnızca setScreenStream
+   * içinde tüketilir.
+   */
+  pendingFocusUserId: Snowflake | null;
+  requestFocusOnStream: (userId: Snowflake) => void;
 }
 
 /** Bir sunucu açılırken hangi kanalın seçileceği: en üstteki metin kanalı. */
@@ -341,6 +358,8 @@ export const useStore = create<AppState>((set) => ({
   selfDeaf: false,
   screenStreams: new Map(),
   selfSharing: false,
+  focusedPresenterId: null,
+  pendingFocusUserId: null,
   voiceChatOpen: false,
   serverMutedUserIds: new Set(),
   channelVolumes: loadChannelVolumes(),
@@ -906,10 +925,41 @@ export const useStore = create<AppState>((set) => ({
   setScreenStream: (userId, stream) =>
     set((state) => {
       const screenStreams = new Map(state.screenStreams);
+      const wasSharing = screenStreams.has(userId);
       if (stream) screenStreams.set(userId, stream);
       else screenStreams.delete(userId);
-      return { screenStreams };
+
+      const patch: Partial<AppState> = { screenStreams };
+
+      // Paylaşım bitti ve odaklanılan kişi buysa ızgaraya geri dön.
+      if (!stream && state.focusedPresenterId === userId) {
+        patch.focusedPresenterId = null;
+      }
+
+      // Yeni bir yayın başladı (başkasının): bekleyen bir odaklanma isteği
+      // varsa onu gerçekleştir; yoksa kimse zaten odaklı değilse otomatik
+      // odaklan ve mini bir bildirim sesi çal (bkz. kullanıcı isteği).
+      if (stream && !wasSharing && userId !== state.user?.id) {
+        if (state.pendingFocusUserId === userId) {
+          patch.focusedPresenterId = userId;
+          patch.pendingFocusUserId = null;
+        } else if (!state.focusedPresenterId) {
+          patch.focusedPresenterId = userId;
+        }
+        if (!chimesSuppressed()) playVoiceChime('live');
+      }
+
+      return patch;
     }),
+
+  setFocusedPresenterId: (userId) => set({ focusedPresenterId: userId }),
+
+  requestFocusOnStream: (userId) =>
+    set((state) =>
+      state.screenStreams.has(userId)
+        ? { focusedPresenterId: userId, pendingFocusUserId: null }
+        : { pendingFocusUserId: userId },
+    ),
 
   resetVoiceSession: () =>
     set({
@@ -921,6 +971,8 @@ export const useStore = create<AppState>((set) => ({
       voiceChatOpen: false,
       voiceSpeaking: new Set(),
       screenStreams: new Map(),
+      focusedPresenterId: null,
+      pendingFocusUserId: null,
       pushToTalkActive: false,
       // Sunucu-taraflı susturma kanal oturumuna bağlı — ayrılınca sıfırlanır
       // (bkz. AppState.serverMutedUserIds yorumu). Kişisel ses tercihleri

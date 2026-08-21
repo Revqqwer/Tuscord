@@ -318,9 +318,23 @@ export function VoiceChannelItem({
                 </span>
                 <span className="ml-auto flex shrink-0 items-center gap-1 text-[var(--color-ink-faint)]">
                   {p.selfVideo ? (
-                    <span className="flex items-center gap-0.5 rounded bg-[var(--color-danger)]/15 px-1 text-[9px] font-bold uppercase text-[var(--color-danger)]">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        // Satırın tıklaması zaten join()'i tetikler (bkz. üstteki
+                        // buton) ama biz o async akışın SONUNDA hangi kişiye
+                        // odaklanılacağını da belirtmemiz lazım — bu yüzden
+                        // burada bubbling'e izin VERMİYORUZ, ikisini de elle
+                        // çağırıyoruz (bkz. kullanıcı isteği: canlı rozetine
+                        // dokununca doğrudan o kişinin yayınına gitsin).
+                        e.stopPropagation();
+                        void join();
+                        useStore.getState().requestFocusOnStream(p.user.id);
+                      }}
+                      className="flex items-center gap-0.5 rounded bg-[var(--color-danger)]/15 px-1 text-[9px] font-bold uppercase text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
+                    >
                       <ScreenShare size={10} /> {t('voice.live')}
-                    </span>
+                    </button>
                   ) : null}
                   {mutedByMe && (
                     <VolumeX size={12} className="text-[var(--color-idle)]" aria-label={t('voice.mutedByMe')} />

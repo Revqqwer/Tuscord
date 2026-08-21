@@ -67,6 +67,10 @@ const schema = z.object({
   SMTP_PASS: z.string().optional(),
   MAIL_FROM: z.string().default('Tuscord <noreply@localhost>'),
 
+  LIVEKIT_API_KEY: z.string().optional(),
+  LIVEKIT_API_SECRET: z.string().optional(),
+  LIVEKIT_URL: z.string().optional(),
+
   TRAFFIC_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   ABUSE_CONTACT_EMAIL: z.string().default('abuse@localhost'),
 

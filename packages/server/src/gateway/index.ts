@@ -201,7 +201,14 @@ export class Gateway {
           }
 
           case GatewayOp.HEARTBEAT: {
-            if (connection) connection.lastHeartbeat = Date.now();
+            if (connection) {
+              connection.lastHeartbeat = Date.now();
+              // Presence Redis anahtarının TTL'i (5 dk) — bağlantı uzun süre
+              // hiçbir PRESENCE_UPDATE göndermezse (bkz. setPresence) süresi
+              // dolup kullanıcı hâlâ bağlıyken çevrimdışı görünüyordu. Her
+              // heartbeat'te tazele; anahtar yoksa (görünmez mod) no-op.
+              void redis.expire(RedisKeys.presence(connection.userId), 300);
+            }
             socket.send(JSON.stringify({ op: GatewayOp.HEARTBEAT_ACK } satisfies GatewayPacket));
             break;
           }
