@@ -71,6 +71,9 @@ const schema = z.object({
   LIVEKIT_API_SECRET: z.string().optional(),
   LIVEKIT_URL: z.string().optional(),
 
+  /** Cloudflare Email Worker'ın gelen mailleri POST ederken taşıdığı paylaşılan sır. */
+  INBOUND_EMAIL_SECRET: z.string().optional(),
+
   TRAFFIC_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   ABUSE_CONTACT_EMAIL: z.string().default('abuse@localhost'),
 

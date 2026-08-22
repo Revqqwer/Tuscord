@@ -11,9 +11,9 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 import { z } from 'zod';
-import { Limits, USERNAME_PATTERN } from '@tuscord/shared';
+import { Limits, USERNAME_PATTERN, isStrongPassword } from '@tuscord/shared';
 import { db } from '../db/index.js';
 import { users, verificationTokens } from '../db/schema.js';
 import { hashPassword, needsRehash, verifyPassword } from '../auth/password.js';
@@ -32,7 +32,14 @@ import { logTraffic } from '../services/compliance.js';
 import { emailDomainDeliverable } from '../services/email-domain.js';
 import { passwordResetMail, sendMail, verificationMail } from '../services/mail.js';
 import { toSelfUser } from '../services/serialize.js';
-import { requestIp } from '../app.js';
+import { attachSession, requestIp } from '../app.js';
+
+/** Kayıtta ve parola değişiminde ortak: uzunluk + en az 1 büyük/küçük harf/rakam. */
+const strongPassword = z
+  .string()
+  .min(Limits.PASSWORD_MIN, `Parola en az ${Limits.PASSWORD_MIN} karakter olmalı`)
+  .max(Limits.PASSWORD_MAX)
+  .refine(isStrongPassword, 'Parola en az 1 büyük harf, 1 küçük harf ve 1 rakam içermeli');
 
 const registerBody = z.object({
   username: z
@@ -41,10 +48,7 @@ const registerBody = z.object({
     .toLowerCase()
     .regex(USERNAME_PATTERN, 'Kullanıcı adı 2-32 karakter, küçük harf/rakam/_/. olmalı'),
   email: z.string().trim().toLowerCase().email('Geçerli bir e-posta gir'),
-  password: z
-    .string()
-    .min(Limits.PASSWORD_MIN, `Parola en az ${Limits.PASSWORD_MIN} karakter olmalı`)
-    .max(Limits.PASSWORD_MAX),
+  password: strongPassword,
   displayName: z.string().trim().max(Limits.DISPLAY_NAME_MAX).optional(),
 });
 
@@ -57,6 +61,9 @@ const loginBody = z.object({
 
 /** "Beni oturumda tut" seçiliyken kullanılan oturum süresi — pratikte "çıkış yapana kadar". */
 const REMEMBER_ME_TTL_DAYS = 365;
+
+/** Aynı hesaba art arda parola sıfırlama maili gitmesin diye bekleme süresi. */
+const PASSWORD_RESET_COOLDOWN_MIN = 5;
 
 function hashVerificationToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -184,6 +191,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (user.isDisabled || user.deletedAt) {
       throw Errors.forbidden('account_disabled', 'Hesap kapatılmış');
     }
+    if (user.suspendedUntil && user.suspendedUntil > new Date()) {
+      throw Errors.forbidden('account_suspended', 'Hesap geçici olarak askıya alınmış', {
+        until: user.suspendedUntil.toISOString(),
+      });
+    }
 
     // argon2 parametreleri sıkılaştırıldıysa hash'i sessizce güncelle.
     if (needsRehash(user.passwordHash)) {
@@ -264,6 +276,29 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
+  /**
+   * Doğrulama e-postasını yeniden gönder — kayıt sırasındaki gönderim
+   * başarısız olduysa (SMTP geçici hata vb.) ya da kullanıcı maili
+   * bulamadıysa. Aynı enumeration-önleme ilkesi: hesap yoksa/zaten
+   * doğrulanmışsa da her zaman aynı 204 döner (bkz. request-password-reset).
+   */
+  app.post('/auth/resend-verification', async (request, reply) => {
+    const ip = requestIp(request);
+    await app.rateLimiter.consume('AUTH_RESEND_VERIFY', ip);
+
+    const { email } = z.object({ email: z.string().trim().toLowerCase().email() }).parse(request.body);
+    const user = await db.query.users.findFirst({ where: eq(users.email, email) });
+
+    if (user && !user.deletedAt && !user.emailVerified) {
+      const token = await issueVerificationToken(user.id, 'email_verify', 24 * 3_600_000);
+      await sendMail(
+        verificationMail(email, `${env.WEB_ORIGIN}/dogrula?token=${token}`),
+      ).catch((error) => request.log.error({ error }, 'doğrulama e-postası gönderilemedi'));
+    }
+
+    return reply.status(204).send();
+  });
+
   app.post('/auth/request-password-reset', async (request, reply) => {
     const ip = requestIp(request);
     await app.rateLimiter.consume('AUTH_PASSWORD_RESET', ip);
@@ -272,10 +307,28 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const user = await db.query.users.findFirst({ where: eq(users.email, email) });
 
     if (user && !user.deletedAt) {
-      const token = await issueVerificationToken(user.id, 'password_reset', 3_600_000);
-      await sendMail(
-        passwordResetMail(email, `${env.WEB_ORIGIN}/parola-sifirla?token=${token}`),
-      ).catch((error) => request.log.error({ error }, 'sıfırlama e-postası gönderilemedi'));
+      // Hesap-bazlı bekleme: IP hız sınırı (yukarıda) tek bir kişinin çok
+      // hızlı denemesini engeller ama farklı IP'lerden (ör. mobil veri +
+      // wifi) aynı hesaba art arda mail gitmesini engellemez. Token TTL'i
+      // 1 saat (aşağıda); son PASSWORD_RESET_COOLDOWN_MIN içinde verilmiş,
+      // hâlâ geçerli bir token varsa yeni mail YOLLANMAZ — ama enumeration
+      // sızdırmamak için cevap yine de 204.
+      const stillFresh = new Date(Date.now() + (60 - PASSWORD_RESET_COOLDOWN_MIN) * 60_000);
+      const recent = await db.query.verificationTokens.findFirst({
+        where: and(
+          eq(verificationTokens.userId, user.id),
+          eq(verificationTokens.purpose, 'password_reset'),
+          isNull(verificationTokens.usedAt),
+          gt(verificationTokens.expiresAt, stillFresh),
+        ),
+      });
+
+      if (!recent) {
+        const token = await issueVerificationToken(user.id, 'password_reset', 3_600_000);
+        await sendMail(
+          passwordResetMail(email, `${env.WEB_ORIGIN}/parola-sifirla?token=${token}`),
+        ).catch((error) => request.log.error({ error }, 'sıfırlama e-postası gönderilemedi'));
+      }
     }
 
     // Hesap var mı yok mu belli olmasın: her durumda aynı cevap.
@@ -283,10 +336,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/auth/reset-password', async (request, reply) => {
-    const { token, password } = z
+    // requireAuth DEĞİL — bu uç oturumsuz da (klasik "parolamı unuttum")
+    // çalışmalı. Ama oturum varsa (profil ayarlarından "parolayı değiştir"
+    // tetiklendiyse, aynı tarayıcıda) mevcut parolayı da isteyebilelim diye
+    // elle çözüyoruz — bkz. aşağısı.
+    await attachSession(request);
+
+    const { token, password, currentPassword } = z
       .object({
         token: z.string().min(1),
-        password: z.string().min(Limits.PASSWORD_MIN).max(Limits.PASSWORD_MAX),
+        password: strongPassword,
+        currentPassword: z.string().optional(),
       })
       .parse(request.body);
 
@@ -300,6 +360,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!row || row.expiresAt.getTime() <= Date.now()) {
       throw Errors.badRequest('invalid_token', 'Bağlantı geçersiz veya süresi dolmuş');
+    }
+
+    // Token'ın sahibiyle şu an oturum açmış kişi AYNIYSA (profil
+    // ayarlarından tetiklenen değişim) — ekstra doğrulama olarak mevcut
+    // parola da istenir. Oturumsuzsa (klasik "parolamı unuttum") atlanır —
+    // zaten hatırlamadığı için sıfırlıyor.
+    if (request.session && request.session.user.id === row.userId) {
+      if (!currentPassword) {
+        throw Errors.badRequest('current_password_required', 'Mevcut parolanı gir');
+      }
+      const currentUser = await db.query.users.findFirst({ where: eq(users.id, row.userId) });
+      const ok = currentUser && (await verifyPassword(currentUser.passwordHash, currentPassword));
+      if (!ok) throw Errors.badRequest('wrong_current_password', 'Mevcut parola yanlış');
     }
 
     await db

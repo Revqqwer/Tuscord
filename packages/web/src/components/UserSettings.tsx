@@ -219,13 +219,13 @@ export function UserSettings({ user, onClose }: Props) {
    * AYNI sunucu ucu: `/auth/request-password-reset`). Kullanıcı raporu:
    * "şifre değiştirme linki maile gitsin ve işlem oradan devam etsin".
    */
-  const [changePasswordSent, setChangePasswordSent] = useState(false);
+  const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
   const [changePasswordBusy, setChangePasswordBusy] = useState(false);
   async function requestPasswordChange() {
     setChangePasswordBusy(true);
     try {
       await api.post('/auth/request-password-reset', { email: user.email });
-      setChangePasswordSent(true);
+      setChangePasswordModalOpen(true);
     } finally {
       setChangePasswordBusy(false);
     }
@@ -596,7 +596,7 @@ export function UserSettings({ user, onClose }: Props) {
           {/* Masaüstü uygulaması — web arayüzüyle birebir aynı (bkz. packages/desktop). */}
           <div className="border-t border-[var(--color-line)] pt-4">
             <a
-              href="/downloads/Tuscord-Setup-0.1.4.exe"
+              href="/api/v1/downloads/desktop"
               className="flex items-center gap-1.5 rounded bg-[var(--color-surface-3)] px-3 py-1.5 text-sm hover:bg-[var(--color-surface-2)]"
             >
               <Download size={14} /> {t('profile.downloadDesktopApp')}
@@ -618,7 +618,7 @@ export function UserSettings({ user, onClose }: Props) {
               <button
                 type="button"
                 onClick={() => void requestPasswordChange()}
-                disabled={changePasswordBusy || changePasswordSent}
+                disabled={changePasswordBusy}
                 className="rounded bg-[var(--color-surface-3)] px-3 py-1.5 text-sm hover:bg-[var(--color-surface-2)] disabled:opacity-50"
               >
                 {t('profile.changePassword')}
@@ -645,12 +645,42 @@ export function UserSettings({ user, onClose }: Props) {
                 {t('profile.deleteAccount')}
               </button>
             </div>
-            {changePasswordSent && (
-              <p className="mt-2 text-sm text-[var(--color-online)]">{t('profile.changePasswordSent')}</p>
-            )}
           </div>
         </div>
       </div>
+
+      {changePasswordModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setChangePasswordModalOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-label={t('profile.changePassword')}
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-sm rounded-lg bg-[var(--color-surface-1)] p-6 text-center shadow-2xl"
+          >
+            <button
+              type="button"
+              onClick={() => setChangePasswordModalOpen(false)}
+              aria-label={t('common.close')}
+              className="absolute right-3 top-3 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+            >
+              <X size={18} />
+            </button>
+            <p role="status" className="mb-4 mt-2 text-sm text-[var(--color-online)]">
+              {t('profile.changePasswordSent')}
+            </p>
+            <button
+              type="button"
+              onClick={() => setChangePasswordModalOpen(false)}
+              className="w-full rounded bg-[var(--color-brand)] px-4 py-2 text-sm font-medium text-black transition hover:bg-[var(--color-brand-strong)]"
+            >
+              {t('common.close')}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

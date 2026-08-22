@@ -53,6 +53,8 @@ export const RateLimits = {
   AUTH_LOGIN: [10, 300],
   AUTH_REGISTER: [10, 3600],
   AUTH_PASSWORD_RESET: [3, 3600],
+  AUTH_RESEND_VERIFY: [3, 3600],
+  TICKET_CREATE: [5, 3600],
   /** Kullanıcı + kanal başına. Kanal yavaş modu bunun ÜSTÜNE uygulanır. */
   MESSAGE_CREATE: [10, 5],
   MESSAGE_EDIT: [10, 5],
@@ -104,6 +106,18 @@ export const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
 
 export function isValidEmail(value: string): boolean {
   return EMAIL_PATTERN.test(value.trim());
+}
+
+/**
+ * Parola gücü: en az 1 büyük harf, 1 küçük harf, 1 rakam — uzunluk (PASSWORD_MIN/MAX)
+ * AYRI kontrol edilir, burası yalnızca karakter çeşitliliğine bakar.
+ */
+const PASSWORD_UPPER = /[A-ZÇĞİÖŞÜ]/;
+const PASSWORD_LOWER = /[a-zçğıöşü]/;
+const PASSWORD_DIGIT = /[0-9]/;
+
+export function isStrongPassword(value: string): boolean {
+  return PASSWORD_UPPER.test(value) && PASSWORD_LOWER.test(value) && PASSWORD_DIGIT.test(value);
 }
 
 export function isValidUsername(value: string): boolean {

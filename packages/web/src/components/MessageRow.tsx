@@ -6,7 +6,7 @@
  * silme yetkisi verir; sunucu da aynı kuralı uygular).
  */
 
-import { useState, type KeyboardEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flag, Paperclip, Pencil, Reply, SmilePlus, Trash2 } from 'lucide-react';
 import type { APIMessage } from '@tuscord/shared';
@@ -65,11 +65,29 @@ export function MessageRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /** Listenin en altındaki mesajlarda tepki çubuğu ekran dışına taşmasın diye
+   * yeterli yer yoksa yukarı açılır (bkz. kullanıcı raporu). */
+  const [pickerOpensUpward, setPickerOpensUpward] = useState(false);
+  const pickerAnchorRef = useRef<HTMLDivElement>(null);
   const isBlocked = useStore((s) => s.blocks.some((b) => b.user.id === message.author.id));
   const [revealed, setRevealed] = useState(false);
   const [lightboxAttachment, setLightboxAttachment] = useState<{ url: string; filename: string } | null>(
     null,
   );
+
+  // Açılınca, altta yeterli yer olup olmadığını ölç — yoksa yukarı açılsın.
+  // ÖNEMLİ: pencere yüksekliği DEĞİL, mesaj listesinin kendi kaydırılabilir
+  // kutusunun alt sınırı esas alınır — altında Composer (yazma kutusu) var,
+  // o da yer kaplıyor; pencereye göre "sığıyor" görünse bile Composer'ın
+  // ARKASINDA kalabiliyordu (bkz. kullanıcı raporu: son 1-2 mesajda).
+  useLayoutEffect(() => {
+    if (!pickerOpen || !pickerAnchorRef.current) return;
+    const rect = pickerAnchorRef.current.getBoundingClientRect();
+    const scrollContainer = pickerAnchorRef.current.closest('.overflow-y-auto');
+    const bottomLimit = scrollContainer ? scrollContainer.getBoundingClientRect().bottom : window.innerHeight;
+    const PICKER_HEIGHT_ESTIMATE = 48; // px — dolgu + emoji satırı, kabaca.
+    setPickerOpensUpward(rect.bottom + PICKER_HEIGHT_ESTIMATE > bottomLimit);
+  }, [pickerOpen]);
 
   const author = message.author.displayName ?? message.author.username;
   const time = new Date(message.createdAt);
@@ -297,12 +315,16 @@ export function MessageRow({
       {/* Hover eylem çubuğu */}
       {!editing && (
         <div className="absolute right-2 top-0 hidden items-center gap-0.5 rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] p-0.5 group-hover:flex">
-          <div className="relative">
+          <div className="relative" ref={pickerAnchorRef}>
             <Action label={t('message.react')} onClick={() => setPickerOpen((open) => !open)}>
               <SmilePlus size={14} />
             </Action>
             {pickerOpen && (
-              <div className="absolute right-0 top-8 z-10 flex gap-1 rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] p-1 shadow-lg">
+              <div
+                className={`absolute right-0 z-10 flex gap-1 rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] p-1 shadow-lg ${
+                  pickerOpensUpward ? 'bottom-8' : 'top-8'
+                }`}
+              >
                 {QUICK_REACTIONS.map((emoji) => (
                   <button
                     key={emoji}

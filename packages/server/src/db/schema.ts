@@ -20,6 +20,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  serial,
   smallint,
   text,
   timestamp,
@@ -65,6 +66,14 @@ export const users = pgTable(
     createdAt: ts('created_at').notNull().defaultNow(),
     /** KVKK silme talebi işlendiğinde doldurulur; kayıt anonimleştirilir. */
     deletedAt: ts('deleted_at'),
+    /**
+     * Geçici askıya alma — `isDisabled` (kalıcı, yalnızca admin geri alır)
+     * ile KARIŞTIRILMASIN: bu, çok rapor alan bir hesabı OTOMATİK olarak
+     * belirli bir süreliğine kilitler (bkz. services/suspension.ts). Süre
+     * dolunca kendiliğinden biter — ayrı bir "kaldır" işlemi gerekmez, login
+     * kontrolü her seferinde `suspendedUntil > now` diye bakar.
+     */
+    suspendedUntil: ts('suspended_until'),
   },
   (t) => [
     uniqueIndex('users_username_discriminator_key').on(t.username, t.discriminator),
@@ -530,11 +539,61 @@ export const reports = pgTable(
     handledBy: snowflake('handled_by'),
     handledAt: ts('handled_at'),
     createdAt: ts('created_at').notNull().defaultNow(),
+    /**
+     * Raporun asıl hedef KULLANICISI — targetType='user' ise targetId'nin
+     * kendisi, targetType='message' ise mesajın yazarı (snapshot.authorId),
+     * 'guild' ise null. Otomatik askıya alma eşiğini (bkz.
+     * services/suspension.ts) indeksli tek bir sorguyla saymak için ayrıca
+     * tutuluyor — her seferinde snapshot'ı JS'te ayrıştırıp saymak yerine.
+     */
+    resolvedUserId: snowflake('resolved_user_id'),
   },
   (t) => [
     index('reports_status_idx').on(t.status, t.id.desc()),
     index('reports_target_idx').on(t.targetType, t.targetId),
+    index('reports_resolved_user_idx').on(t.resolvedUserId, t.createdAt),
   ],
+);
+
+/**
+ * Destek talepleri — hem gönderim ekranından (giriş yapmış kullanıcı) hem
+ * de askıya alınan bir hesabın giriş engeliyle karşılaşınca yönlendirildiği
+ * ekrandan (bkz. web VerifyEmailScreen.tsx yanındaki SuspendedScreen)
+ * oturumsuz gönderilebilir — bu yüzden `userId` NULLABLE: askıya alınan
+ * kullanıcı giriş yapamadığı için istek oturuma değil, girdiği e-postaya
+ * bağlanır.
+ */
+export const tickets = pgTable(
+  'tickets',
+  {
+    id: snowflake('id').primaryKey(),
+    /** İnsan-okunur, sıralı numara (#1042 gibi) — e-postalarda ve admin
+     * panelinde snowflake yerine bu gösterilir, akılda kalıcı olsun diye. */
+    number: serial('number').notNull().unique(),
+    /** Giriş yapmış bir kullanıcıdan geldiyse dolu — yoksa null. */
+    userId: snowflake('user_id'),
+    email: varchar('email', { length: 254 }).notNull(),
+    subject: varchar('subject', { length: 200 }).notNull(),
+    /** 'open' | 'answered' | 'closed' */
+    status: varchar('status', { length: 10 }).notNull().default('open'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('tickets_status_idx').on(t.status, t.id.desc())],
+);
+
+export const ticketMessages = pgTable(
+  'ticket_messages',
+  {
+    id: snowflake('id').primaryKey(),
+    ticketId: snowflake('ticket_id')
+      .notNull()
+      .references(() => tickets.id, { onDelete: 'cascade' }),
+    /** 'user' | 'admin' */
+    authorType: varchar('author_type', { length: 10 }).notNull(),
+    body: text('body').notNull(),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('ticket_messages_ticket_idx').on(t.ticketId, t.id)],
 );
 
 /**
@@ -566,6 +625,23 @@ export const trafficLogs = pgTable(
 );
 
 /**
+ * Masaüstü uygulaması indirme kaydı — "kaç kişi indirdi" sorusuna cevap
+ * (bkz. routes/downloads.ts GET /downloads/desktop, admin panelindeki
+ * özel raporlama sayfası AdminStats.tsx). Kullanıcı hesabına bağlı DEĞİL —
+ * indirme linki giriş gerektirmiyor, tek kimlik IP + user-agent.
+ */
+export const desktopDownloads = pgTable(
+  'desktop_downloads',
+  {
+    id: snowflake('id').primaryKey(),
+    ip: varchar('ip', { length: 45 }).notNull(),
+    userAgent: text('user_agent'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('desktop_downloads_created_idx').on(t.createdAt)],
+);
+
+/**
  * Gün başına en yüksek eşzamanlı aktif (gateway'e bağlı) kullanıcı sayısı —
  * admin panelindeki "Genel bakış" sekmesi için (bkz. services/activeUserPeaks.ts).
  * Tüm zamanların rekoru, bu tablodaki TÜM satırların MAX'ı olarak hesaplanır
@@ -590,5 +666,8 @@ export type Message = typeof messages.$inferSelect;
 export type Attachment = typeof attachments.$inferSelect;
 export type Invite = typeof invites.$inferSelect;
 export type Report = typeof reports.$inferSelect;
+export type Ticket = typeof tickets.$inferSelect;
+export type DesktopDownload = typeof desktopDownloads.$inferSelect;
+export type TicketMessage = typeof ticketMessages.$inferSelect;
 export type AuditLogRow = typeof auditLog.$inferSelect;
 export type ActiveUserPeak = typeof activeUserPeaks.$inferSelect;

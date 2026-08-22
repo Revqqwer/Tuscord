@@ -21,6 +21,7 @@ interface DailyStat {
   uniqueUsers: number;
   newRegistrations: number;
   peakConcurrent: number;
+  desktopDownloads: number;
 }
 
 const DAY_OPTIONS = [7, 30, 90] as const;
@@ -46,6 +47,7 @@ export function AdminStats({ onBack }: { onBack: () => void }) {
       registrations: data.reduce((sum, d) => sum + d.newRegistrations, 0),
       peak: Math.max(0, ...data.map((d) => d.peakConcurrent)),
       avgUnique: data.length ? Math.round(data.reduce((sum, d) => sum + d.uniqueUsers, 0) / data.length) : 0,
+      downloads: data.reduce((sum, d) => sum + d.desktopDownloads, 0),
     };
   }, [data]);
 
@@ -89,10 +91,11 @@ export function AdminStats({ onBack }: { onBack: () => void }) {
         ) : (
           <>
             {totals && (
-              <div className="mb-6 grid grid-cols-3 gap-3">
+              <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <SummaryTile label={t('adminStats.avgUnique')} value={totals.avgUnique} />
                 <SummaryTile label={t('adminStats.totalRegistrations')} value={totals.registrations} />
                 <SummaryTile label={t('adminStats.periodPeak')} value={totals.peak} />
+                <SummaryTile label={t('adminStats.totalDownloads')} value={totals.downloads} />
               </div>
             )}
 
@@ -116,6 +119,13 @@ export function AdminStats({ onBack }: { onBack: () => void }) {
               data={data}
               field="peakConcurrent"
               color="var(--color-dnd)"
+            />
+            <ChartCard
+              title={t('adminStats.downloadsTitle')}
+              subtitle={t('adminStats.downloadsSubtitle')}
+              data={data}
+              field="desktopDownloads"
+              color="var(--color-idle)"
             />
           </>
         )}
@@ -149,7 +159,7 @@ function ChartCard({
   title: string;
   subtitle: string;
   data: DailyStat[];
-  field: keyof Pick<DailyStat, 'uniqueUsers' | 'newRegistrations' | 'peakConcurrent'>;
+  field: keyof Pick<DailyStat, 'uniqueUsers' | 'newRegistrations' | 'peakConcurrent' | 'desktopDownloads'>;
   color: string;
 }) {
   const { t } = useTranslation();

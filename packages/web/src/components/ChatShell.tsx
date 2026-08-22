@@ -11,6 +11,7 @@ import {
   AtSign,
   Bot,
   Hash,
+  LifeBuoy,
   Lock,
   Menu,
   Plus,
@@ -49,7 +50,9 @@ import { Avatar } from './Avatar';
 import { GuildModal } from './GuildModal';
 import { ServerSettings } from './ServerSettings';
 import { ChannelSettings } from './ChannelSettings';
+import { ReportModal } from './ReportModal';
 import { SearchModal } from './SearchModal';
+import { SupportScreen } from './SupportScreen';
 import { AdminPanel } from './AdminPanel';
 import { DeveloperPortal } from './DeveloperPortal';
 import { useContextMenu, type MenuItem } from './ContextMenu';
@@ -131,6 +134,7 @@ export function ChatShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [friendsOpen, setFriendsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [developerPortalOpen, setDeveloperPortalOpen] = useState(false);
   /**
@@ -546,37 +550,53 @@ export function ChatShell() {
               {status === 'reconnecting' ? t('app.reconnecting') : t('app.connecting')}
             </span>
           )}
-          {/* Mesaj arama — yalnızca sunucu kanalında (DM'de arama yok). */}
-          {guildState && (
+          <div className="ml-auto flex items-center gap-1">
+            {/* Mesaj arama — yalnızca sunucu kanalında (DM'de arama yok). */}
+            {guildState && (
+              <button
+                type="button"
+                onClick={() => setSearchOpen(true)}
+                aria-label={t('search.title')}
+                title={t('search.title')}
+                className="rounded p-1.5 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
+              >
+                <Search size={18} />
+              </button>
+            )}
+            {/* Üye listesini göster/gizle — kapatınca panel kaybolur, bu düğme
+                her zaman görünür kalır ki geri açılabilsin. */}
+            {guildState && (
+              <button
+                type="button"
+                onClick={() => store.setMemberListVisible(!store.memberListVisible)}
+                aria-label={store.memberListVisible ? t('memberGroups.hide') : t('memberGroups.show')}
+                title={store.memberListVisible ? t('memberGroups.hide') : t('memberGroups.show')}
+                aria-pressed={store.memberListVisible}
+                className={`rounded p-1.5 hover:bg-[var(--color-surface-2)] ${
+                  store.memberListVisible
+                    ? 'text-[var(--color-brand)]'
+                    : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+                }`}
+              >
+                <Users size={18} />
+              </button>
+            )}
+            {/* Destek — her zaman görünür, hangi ekranda olursan ol ulaşılabilir olsun. */}
             <button
               type="button"
-              onClick={() => setSearchOpen(true)}
-              aria-label={t('search.title')}
-              title={t('search.title')}
-              className="ml-auto rounded p-1.5 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
+              onClick={() => setSupportOpen(true)}
+              aria-label={t('support.title')}
+              title={t('support.title')}
+              className="rounded p-1.5 text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
             >
-              <Search size={18} />
+              <LifeBuoy size={18} />
             </button>
-          )}
-          {/* Üye listesini göster/gizle — kapatınca panel kaybolur, bu düğme
-              her zaman görünür kalır ki geri açılabilsin. */}
-          {guildState && (
-            <button
-              type="button"
-              onClick={() => store.setMemberListVisible(!store.memberListVisible)}
-              aria-label={store.memberListVisible ? t('memberGroups.hide') : t('memberGroups.show')}
-              title={store.memberListVisible ? t('memberGroups.hide') : t('memberGroups.show')}
-              aria-pressed={store.memberListVisible}
-              className={`rounded p-1.5 hover:bg-[var(--color-surface-2)] ${
-                store.memberListVisible
-                  ? 'text-[var(--color-brand)]'
-                  : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
-              }`}
-            >
-              <Users size={18} />
-            </button>
-          )}
+          </div>
         </header>
+
+        {supportOpen && (
+          <SupportScreen initialEmail={user?.email} onClose={() => setSupportOpen(false)} />
+        )}
 
         {channel?.type === ChannelType.GUILD_VOICE ? (
           <VoiceStage
@@ -609,18 +629,9 @@ export function ChatShell() {
                 const path = `/channels/${message.channelId}/messages/${message.id}/reactions/${encodeURIComponent(emoji)}`;
                 void (active ? api.delete(path) : api.put(path)).catch(() => undefined);
               }}
-              onReport={(message) => {
-                const reason = prompt(t('message.reportPrompt'));
-                if (!reason) return;
-                void api
-                  .post('/reports', {
-                    targetType: 'message',
-                    targetId: message.id,
-                    reason,
-                  })
-                  .then(() => alert(t('message.reportSent')))
-                  .catch(() => undefined);
-              }}
+              onReport={(message) =>
+                store.setReportTarget({ targetType: 'message', targetId: message.id })
+              }
               pendingJumpId={
                 jumpTarget?.channelId === activeChannelId ? jumpTarget.messageId : null
               }
@@ -686,6 +697,8 @@ export function ChatShell() {
           }}
         />
       )}
+
+      <ReportModal />
 
       {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
       {developerPortalOpen && <DeveloperPortal onClose={() => setDeveloperPortalOpen(false)} />}

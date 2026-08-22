@@ -1,7 +1,7 @@
 {
   "name": "@tuscord/desktop",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Tuscord masaüstü uygulaması — tuscord.com'u yükleyen ince bir Electron kabuğu.",
   "main": "main.js",
   "scripts": {

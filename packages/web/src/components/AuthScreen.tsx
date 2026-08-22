@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
-import { Limits, USERNAME_PATTERN, isValidEmail, type SelfUser } from '@tuscord/shared';
+import { Limits, USERNAME_PATTERN, isStrongPassword, isValidEmail, type SelfUser } from '@tuscord/shared';
 import { ApiError, api } from '../lib/api';
 import { isDesktopApp } from '../lib/platform';
 import { LegalFooter } from './LegalFooter';
@@ -9,6 +9,9 @@ import { WalrusLoader } from './WalrusLoader';
 
 interface Props {
   onAuthenticated: (user: SelfUser) => void;
+  /** Hesap askıya alınmışsa (bkz. server auth.ts login: suspendedUntil) genel
+   * hata yerine destek ekranına yönlendirmek için — `until` ISO tarih. */
+  onSuspended?: (email: string, until: string) => void;
 }
 
 type FieldName = 'username' | 'email' | 'password';
@@ -34,7 +37,7 @@ const FIELD_MESSAGE_KEY: Record<FieldName, string> = {
   password: 'auth.fieldErrors.password_short',
 };
 
-export function AuthScreen({ onAuthenticated }: Props) {
+export function AuthScreen({ onAuthenticated, onSuspended }: Props) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
@@ -77,6 +80,8 @@ export function AuthScreen({ onAuthenticated }: Props) {
       // Girişte uzunluk kontrolü YOK: eski/kısa parolası olan kullanıcıyı
       // kendi hesabından kilitlemeyelim.
       errors.password = t('auth.fieldErrors.password_short', { min: Limits.PASSWORD_MIN });
+    } else if (mode === 'register' && !isStrongPassword(password)) {
+      errors.password = t('auth.fieldErrors.password_weak');
     }
 
     return errors;
@@ -142,6 +147,15 @@ export function AuthScreen({ onAuthenticated }: Props) {
       const result = await api.post<{ user: SelfUser }>(path, body);
       onAuthenticated(result.user);
     } catch (caught) {
+      if (
+        caught instanceof ApiError &&
+        caught.code === 'account_suspended' &&
+        caught.fields?.until &&
+        onSuspended
+      ) {
+        onSuspended(email, caught.fields.until);
+        return;
+      }
       showServerError(caught);
     } finally {
       setBusy(false);

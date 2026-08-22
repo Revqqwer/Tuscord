@@ -4,23 +4,32 @@
  * `POST /auth/reset-password` ucunu çağırır — token geçerliyse yeni parola
  * kaydedilir ve tüm cihazlardaki oturumlar düşer (bkz. auth.ts yorumu:
  * hesap ele geçirilmişse saldırganın oturumu da düşsün).
+ *
+ * `requireCurrentPassword`: bağlantı, OTURUM AÇIKKEN profil ayarlarından
+ * ("parolayı değiştir") tetiklendiyse true — bu durumda ekstra doğrulama
+ * olarak mevcut parola da istenir (bkz. server auth.ts aynı kontrolü tekrar
+ * yapıyor, burası yalnızca UX). Oturumsuz klasik "parolamı unuttum" akışında
+ * false — kullanıcı zaten parolasını hatırlamadığı için isteyemeyiz.
  */
 
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
-import { Limits } from '@tuscord/shared';
+import { Limits, isStrongPassword } from '@tuscord/shared';
 import { ApiError, api } from '../lib/api';
 import { WalrusLoader } from './WalrusLoader';
 
 interface Props {
   token: string;
+  requireCurrentPassword: boolean;
   onDone: () => void;
 }
 
-export function ResetPasswordScreen({ token, onDone }: Props) {
+export function ResetPasswordScreen({ token, requireCurrentPassword, onDone }: Props) {
   const { t } = useTranslation();
+  const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,20 +39,40 @@ export function ResetPasswordScreen({ token, onDone }: Props) {
     event.preventDefault();
     setError(null);
 
+    if (requireCurrentPassword && currentPassword.length === 0) {
+      setError(t('auth.fieldErrors.current_password_required'));
+      return;
+    }
     if (password.length < Limits.PASSWORD_MIN) {
       setError(t('auth.fieldErrors.password_short', { min: Limits.PASSWORD_MIN }));
+      return;
+    }
+    if (!isStrongPassword(password)) {
+      setError(t('auth.fieldErrors.password_weak'));
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError(t('auth.fieldErrors.password_mismatch'));
       return;
     }
 
     setBusy(true);
     try {
-      await api.post('/auth/reset-password', { token, password });
+      await api.post('/auth/reset-password', {
+        token,
+        password,
+        ...(requireCurrentPassword ? { currentPassword } : {}),
+      });
       setDone(true);
     } catch (caught) {
       setError(
         caught instanceof ApiError && caught.code === 'invalid_token'
           ? t('auth.resetInvalidToken')
-          : t('auth.errors.unknown'),
+          : caught instanceof ApiError && caught.code === 'wrong_current_password'
+            ? t('auth.fieldErrors.wrong_current_password')
+            : caught instanceof ApiError && caught.code === 'current_password_required'
+              ? t('auth.fieldErrors.current_password_required')
+              : t('auth.errors.unknown'),
       );
     } finally {
       setBusy(false);
@@ -74,6 +103,21 @@ export function ResetPasswordScreen({ token, onDone }: Props) {
           </>
         ) : (
           <form noValidate onSubmit={submit}>
+            {requireCurrentPassword && (
+              <label className="mb-4 block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-[var(--color-ink-muted)]">
+                  {t('auth.currentPassword')}
+                </span>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={currentPassword}
+                  autoComplete="current-password"
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="w-full rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 text-[var(--color-ink)] outline-none focus:border-[var(--color-brand)]"
+                />
+              </label>
+            )}
+
             <label className="mb-4 block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-[var(--color-ink-muted)]">
                 {t('auth.newPassword')}
@@ -98,6 +142,21 @@ export function ResetPasswordScreen({ token, onDone }: Props) {
                 </button>
               </span>
             </label>
+
+            <label className="mb-4 block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-[var(--color-ink-muted)]">
+                {t('auth.confirmNewPassword')}
+              </span>
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                autoComplete="new-password"
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 text-[var(--color-ink)] outline-none focus:border-[var(--color-brand)]"
+              />
+            </label>
+
+            <p className="mb-4 text-xs text-[var(--color-ink-faint)]">{t('auth.passwordRules')}</p>
 
             {error && (
               <p role="alert" className="mb-3 text-sm text-[var(--color-danger)]">

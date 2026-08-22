@@ -8,8 +8,11 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowLeft,
   Ban,
+  Download,
   Flame,
+  LifeBuoy,
   LogIn,
+  Send,
   Server,
   ShieldCheck,
   Trash2,
@@ -45,9 +48,28 @@ interface AdminGuildMembers {
 interface AdminSummary {
   totalUsers: number;
   totalGuilds: number;
+  totalDesktopDownloads: number;
   activeUsersNow: number;
   dailyPeakActiveUsers: number;
   allTimePeakActiveUsers: number;
+}
+interface AdminTicket {
+  id: string;
+  number: number;
+  userId: string | null;
+  email: string;
+  subject: string;
+  status: 'open' | 'answered' | 'closed';
+  createdAt: string;
+}
+interface AdminTicketMessage {
+  id: string;
+  authorType: 'user' | 'admin';
+  body: string;
+  createdAt: string;
+}
+interface AdminTicketDetail extends AdminTicket {
+  messages: AdminTicketMessage[];
 }
 
 /** İnsan-okunur boyut — 0 B'den TB'ye, admin panelinde disk kullanımı için. */
@@ -64,6 +86,16 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('tr', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** Tarih + saat — destek mesajı zaman damgaları için (tarih tek başına yetmez, thread içinde sıra önemli). */
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('tr', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 interface Props {
   onClose: () => void;
 }
@@ -71,10 +103,14 @@ interface Props {
 export function AdminPanel({ onClose }: Props) {
   const { t } = useTranslation();
   const setPendingActiveGuild = useStore((s) => s.setPendingActiveGuild);
-  const [tab, setTab] = useState<'summary' | 'users' | 'guilds'>('summary');
+  const [tab, setTab] = useState<'summary' | 'users' | 'guilds' | 'tickets'>('summary');
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [guilds, setGuilds] = useState<AdminGuild[] | null>(null);
+  const [tickets, setTickets] = useState<AdminTicket[] | null>(null);
+  const [drilldownTicket, setDrilldownTicket] = useState<AdminTicketDetail | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
   /** Detayına girilen sunucu — dropdown gibi, aynı panelde üye+rol listesine geçer. */
   const [drilldownGuild, setDrilldownGuild] = useState<AdminGuild | null>(null);
   const [drilldown, setDrilldown] = useState<AdminGuildMembers | null>(null);
@@ -92,7 +128,42 @@ export function AdminPanel({ onClose }: Props) {
     if (tab === 'guilds' && !guilds) {
       void api.get<AdminGuild[]>('/admin/guilds').then(setGuilds).catch(() => setGuilds([]));
     }
-  }, [tab, users, guilds]);
+    if (tab === 'tickets' && !tickets) {
+      void api.get<AdminTicket[]>('/admin/tickets').then(setTickets).catch(() => setTickets([]));
+    }
+  }, [tab, users, guilds, tickets]);
+
+  async function openTicket(id: string) {
+    setDrilldownTicket(null);
+    setReplyText('');
+    const detail = await api.get<AdminTicketDetail>(`/admin/tickets/${id}`).catch(() => null);
+    if (detail) setDrilldownTicket(detail);
+  }
+
+  async function sendReply() {
+    if (!drilldownTicket || replyText.trim().length === 0) return;
+    setReplyBusy(true);
+    try {
+      await api.post(`/admin/tickets/${drilldownTicket.id}/reply`, { message: replyText.trim() });
+      setReplyText('');
+      await openTicket(drilldownTicket.id);
+      setTickets(
+        (list) =>
+          list?.map((x) => (x.id === drilldownTicket.id ? { ...x, status: 'answered' } : x)) ?? list,
+      );
+    } finally {
+      setReplyBusy(false);
+    }
+  }
+
+  async function setTicketStatus(status: AdminTicket['status']) {
+    if (!drilldownTicket) return;
+    await api.patch(`/admin/tickets/${drilldownTicket.id}`, { status }).catch(() => undefined);
+    setDrilldownTicket({ ...drilldownTicket, status });
+    setTickets(
+      (list) => list?.map((x) => (x.id === drilldownTicket.id ? { ...x, status } : x)) ?? list,
+    );
+  }
 
   useEffect(() => {
     if (!drilldownGuild) {
@@ -178,6 +249,7 @@ export function AdminPanel({ onClose }: Props) {
           <TabBtn active={tab === 'summary'} onClick={() => setTab('summary')}>{t('admin.tabSummary')}</TabBtn>
           <TabBtn active={tab === 'users'} onClick={() => setTab('users')}>{t('admin.tabUsers')}</TabBtn>
           <TabBtn active={tab === 'guilds'} onClick={() => setTab('guilds')}>{t('admin.tabGuilds')}</TabBtn>
+          <TabBtn active={tab === 'tickets'} onClick={() => setTab('tickets')}>{t('admin.tabTickets')}</TabBtn>
         </nav>
 
         <div className="flex-1 overflow-y-auto p-2">
@@ -197,6 +269,12 @@ export function AdminPanel({ onClose }: Props) {
                   tone="neutral"
                   label={t('admin.summary.totalGuilds')}
                   value={summary.totalGuilds}
+                />
+                <SummaryTile
+                  icon={<Download size={18} />}
+                  tone="neutral"
+                  label={t('admin.summary.totalDesktopDownloads')}
+                  value={summary.totalDesktopDownloads}
                 />
                 <SummaryTile
                   icon={<Zap size={18} />}
@@ -270,6 +348,115 @@ export function AdminPanel({ onClose }: Props) {
                       )}
                     </div>
                   </div>
+                ))}
+              </>
+            )
+          ) : tab === 'tickets' ? (
+            drilldownTicket ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setDrilldownTicket(null)}
+                  className="mb-2 flex items-center gap-1.5 rounded px-2 py-1.5 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
+                >
+                  <ArrowLeft size={13} /> {t('admin.backToTickets')}
+                </button>
+                <div className="mb-3 px-2">
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">
+                        #{drilldownTicket.number} · {drilldownTicket.subject}
+                      </div>
+                      <div className="truncate text-xs text-[var(--color-ink-faint)]">
+                        {drilldownTicket.email} · {formatDate(drilldownTicket.createdAt)}
+                      </div>
+                    </div>
+                    <TicketStatusBadge status={drilldownTicket.status} />
+                    {drilldownTicket.status !== 'closed' ? (
+                      <button
+                        type="button"
+                        onClick={() => void setTicketStatus('closed')}
+                        className="shrink-0 rounded bg-[var(--color-surface-3)] px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]"
+                      >
+                        {t('admin.closeTicket')}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void setTicketStatus('open')}
+                        className="shrink-0 rounded bg-[var(--color-surface-3)] px-2 py-1 text-xs text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]"
+                      >
+                        {t('admin.reopenTicket')}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mb-3 space-y-2 px-2">
+                  {drilldownTicket.messages.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`rounded-lg p-3 text-sm ${
+                        m.authorType === 'admin'
+                          ? 'ml-6 bg-[var(--color-brand)]/10'
+                          : 'mr-6 bg-[var(--color-surface-2)]'
+                      }`}
+                    >
+                      <div className="mb-1 text-xs text-[var(--color-ink-faint)]">
+                        {m.authorType === 'admin' ? t('admin.ticketReplyLabel') : drilldownTicket.email} ·{' '}
+                        {formatDateTime(m.createdAt)}
+                      </div>
+                      <p className="whitespace-pre-wrap">{m.body}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-end gap-2 px-2">
+                  <textarea
+                    rows={3}
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    placeholder={t('admin.ticketReplyPlaceholder')}
+                    className="flex-1 resize-none rounded border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 text-sm text-[var(--color-ink)] outline-none focus:border-[var(--color-brand)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void sendReply()}
+                    disabled={replyBusy || replyText.trim().length === 0}
+                    title={t('admin.sendReply')}
+                    className="shrink-0 rounded-full bg-[var(--color-brand)] p-2 text-black hover:bg-[var(--color-brand-strong)] disabled:opacity-40"
+                  >
+                    <Send size={16} />
+                  </button>
+                </div>
+              </>
+            ) : tickets === null ? (
+              <Loading />
+            ) : tickets.length === 0 ? (
+              <p className="p-4 text-center text-sm text-[var(--color-ink-faint)]">{t('admin.noTickets')}</p>
+            ) : (
+              <>
+                <div className="px-2 py-1 text-xs text-[var(--color-ink-faint)]">
+                  {t('admin.ticketCount', { count: tickets.length })}
+                </div>
+                {tickets.map((ticket) => (
+                  <button
+                    key={ticket.id}
+                    type="button"
+                    onClick={() => void openTicket(ticket.id)}
+                    className="flex w-full items-center gap-3 rounded px-2 py-2 text-left hover:bg-[var(--color-surface-2)]"
+                  >
+                    <LifeBuoy size={16} className="shrink-0 text-[var(--color-ink-faint)]" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">
+                        #{ticket.number} · {ticket.subject}
+                      </div>
+                      <div className="truncate text-xs text-[var(--color-ink-faint)]">
+                        {ticket.email} · {formatDate(ticket.createdAt)}
+                      </div>
+                    </div>
+                    <TicketStatusBadge status={ticket.status} />
+                  </button>
                 ))}
               </>
             )
@@ -396,6 +583,17 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
     <button type="button" onClick={onClick} className={`border-b-2 px-3 py-2 text-sm ${active ? 'border-[var(--color-brand)] text-[var(--color-ink)]' : 'border-transparent text-[var(--color-ink-muted)]'}`}>
       {children}
     </button>
+  );
+}
+function TicketStatusBadge({ status }: { status: AdminTicket['status'] }) {
+  const { t } = useTranslation();
+  const tone = status === 'closed' ? 'muted' : status === 'answered' ? 'brand' : 'danger';
+  const label =
+    status === 'closed' ? t('admin.ticketClosed') : status === 'answered' ? t('admin.ticketAnswered') : t('admin.ticketOpen');
+  return (
+    <span className="shrink-0">
+      <Badge tone={tone}>{label}</Badge>
+    </span>
   );
 }
 function Badge({ tone, children }: { tone: 'brand' | 'danger' | 'muted'; children: React.ReactNode }) {

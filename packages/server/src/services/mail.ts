@@ -154,6 +154,50 @@ export function verificationMail(to: string, link: string): MailMessage {
   };
 }
 
+/**
+ * Çok rapor alan bir hesap otomatik askıya alındığında (bkz.
+ * services/suspension.ts) — süre + itiraz için destek sayfasına yönlendirme.
+ */
+export function suspensionMail(to: string, until: Date): MailMessage {
+  const untilText = until.toLocaleString('tr-TR', { dateStyle: 'long', timeStyle: 'short' });
+  const link = `${env.WEB_ORIGIN}/destek`;
+  return {
+    to,
+    subject: 'Tuscord hesabın geçici olarak askıya alındı',
+    text: `Merhaba,\n\nHesabın, kısa sürede çok sayıda rapor aldığı için ${untilText} tarihine kadar geçici olarak askıya alındı.\n\nBunun bir hata olduğunu düşünüyorsan destek talebi açabilirsin:\n${link}\n\nTuscord`,
+    html: emailShell({
+      heading: 'Hesabın geçici olarak askıya alındı',
+      body: `Hesabın, kısa sürede çok sayıda rapor aldığı için <strong>${untilText}</strong> tarihine kadar askıya alındı. Bunun bir hata olduğunu düşünüyorsan destek talebi açabilirsin.`,
+      buttonLabel: 'Destek talebi aç',
+      buttonUrl: link,
+      footnote: 'Süre dolunca hesabına otomatik olarak tekrar giriş yapabileceksin.',
+    }),
+  };
+}
+
+/** Bir admin destek talebine yanıt verdiğinde kullanıcıya iletilir. */
+export function ticketReplyMail(
+  to: string,
+  ticketNumber: number,
+  subject: string,
+  message: string,
+): MailMessage {
+  const link = `${env.WEB_ORIGIN}/destek`;
+  const safeMessage = message.replace(/\n/g, '<br />');
+  return {
+    to,
+    subject: `Re: ${subject} (#${ticketNumber})`,
+    text: `#${ticketNumber} numaralı destek talebinize dönüş yapılmıştır:\n\n${message}\n\n—\nYanıt vermek için:\n${link}`,
+    html: emailShell({
+      heading: `#${ticketNumber} numaralı talebinize yanıt geldi`,
+      body: safeMessage,
+      buttonLabel: 'Destek sayfasına git',
+      buttonUrl: link,
+      footnote: `Bu e-posta #${ticketNumber} numaralı Tuscord destek talebine yanıttır.`,
+    }),
+  };
+}
+
 /** Parola sıfırlama isteği. */
 export function passwordResetMail(to: string, link: string): MailMessage {
   return {

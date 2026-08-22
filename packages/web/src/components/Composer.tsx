@@ -331,7 +331,11 @@ export function Composer({
       )}
 
       <div
-        className={`flex items-end gap-2 rounded-lg bg-[var(--color-surface-2)] px-4 py-3 ${
+        // Çubuğun herhangi bir yerine (dolgu boşlukları dahil) tıklamak yazı
+        // alanına odaklansın — yalnızca metnin kendi ince satırına tıklamak
+        // değil (bkz. kullanıcı raporu, ekran görüntüsüyle işaretlenmiş alan).
+        onClick={() => textarea.current?.focus()}
+        className={`flex cursor-text items-end gap-2 rounded-lg bg-[var(--color-surface-2)] px-4 py-3 ${
           dragging ? 'ring-2 ring-[var(--color-brand)]' : ''
         }`}
       >
@@ -403,6 +407,13 @@ export function Composer({
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               void send();
+              return;
+            }
+            // Reply banner açıkken Esc: yazdığın metne dokunmadan yalnızca
+            // "yanıt olarak gönderme" niyetinden vazgeç (bkz. kullanıcı isteği).
+            if (event.key === 'Escape' && replyTo) {
+              event.preventDefault();
+              onCancelReply();
             }
           }}
           onPaste={(event) => {

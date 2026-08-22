@@ -14,6 +14,7 @@ import { db } from '../db/index.js';
 import {
   activeUserPeaks,
   attachments,
+  desktopDownloads,
   guildMembers,
   guilds,
   memberRoles,
@@ -33,7 +34,7 @@ import { toAPIGuild, toAPIMember, toAPIRole, toPublicUser } from '../services/se
 import { onlineUserCount } from '../services/onlineUsers.js';
 import { getActiveUserStats } from '../services/activeUserPeaks.js';
 
-function assertAdmin(request: FastifyRequest): void {
+export function assertAdmin(request: FastifyRequest): void {
   if (!request.session?.user.isAdmin) throw Errors.notFound();
 }
 
@@ -44,15 +45,17 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/summary', async (request, reply) => {
     assertAdmin(request);
 
-    const [[userCountRow], [guildCountRow], activeStats] = await Promise.all([
+    const [[userCountRow], [guildCountRow], [downloadCountRow], activeStats] = await Promise.all([
       db.select({ value: count() }).from(users).where(isNull(users.deletedAt)),
       db.select({ value: count() }).from(guilds),
+      db.select({ value: count() }).from(desktopDownloads),
       getActiveUserStats(),
     ]);
 
     return reply.send({
       totalUsers: userCountRow?.value ?? 0,
       totalGuilds: guildCountRow?.value ?? 0,
+      totalDesktopDownloads: downloadCountRow?.value ?? 0,
       activeUsersNow: onlineUserCount(),
       dailyPeakActiveUsers: activeStats.dailyPeak,
       allTimePeakActiveUsers: activeStats.allTimePeak,
@@ -75,7 +78,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     since.setUTCHours(0, 0, 0, 0);
     const sinceDay = since.toISOString().slice(0, 10);
 
-    const [registrationRows, uniqueUserRows, peakRows] = await Promise.all([
+    const [registrationRows, uniqueUserRows, peakRows, downloadRows] = await Promise.all([
       db
         .select({ day: sql<string>`date_trunc('day', ${users.createdAt})::date`, value: count() })
         .from(users)
@@ -99,6 +102,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         .select({ day: activeUserPeaks.day, value: activeUserPeaks.peak })
         .from(activeUserPeaks)
         .where(gte(activeUserPeaks.day, sinceDay)),
+      db
+        .select({ day: sql<string>`date_trunc('day', ${desktopDownloads.createdAt})::date`, value: count() })
+        .from(desktopDownloads)
+        .where(gte(desktopDownloads.createdAt, since))
+        .groupBy(sql`1`),
     ]);
 
     const toMap = (rows: { day: string; value: number | string }[]) =>
@@ -106,10 +114,17 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const registrations = toMap(registrationRows);
     const uniqueUsers = toMap(uniqueUserRows);
     const peaks = toMap(peakRows);
+    const downloads = toMap(downloadRows);
 
     // Veri olmayan günler de 0 ile serimizde yer alsın — çizgi grafik
     // aralarında atlama yapmasın (bkz. AdminStats.tsx).
-    const series: { date: string; uniqueUsers: number; newRegistrations: number; peakConcurrent: number }[] = [];
+    const series: {
+      date: string;
+      uniqueUsers: number;
+      newRegistrations: number;
+      peakConcurrent: number;
+      desktopDownloads: number;
+    }[] = [];
     for (let i = 0; i < query.days; i++) {
       const day = new Date(since);
       day.setUTCDate(day.getUTCDate() + i);
@@ -119,6 +134,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         uniqueUsers: uniqueUsers.get(key) ?? 0,
         newRegistrations: registrations.get(key) ?? 0,
         peakConcurrent: peaks.get(key) ?? 0,
+        desktopDownloads: downloads.get(key) ?? 0,
       });
     }
 
