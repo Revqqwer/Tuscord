@@ -96,6 +96,15 @@ interface AppState {
    */
   pendingActiveGuildId: Snowflake | null;
 
+  /**
+   * Rapor modalının hedefi — açıkken dolu, kapalıyken null. Farklı yerlerden
+   * (mesaj bağlam menüsü, ses kanalı katılımcı menüsü) TEK bir global modal
+   * tetiklenebilsin diye burada tutuluyor (bkz. ReportModal.tsx, ChatShell.tsx
+   * kökünde bir kez mount edilir) — tarayıcının çirkin `prompt()`'u yerine.
+   */
+  reportTarget: { targetType: 'message' | 'user'; targetId: Snowflake; label?: string } | null;
+  setReportTarget: (target: AppState['reportTarget']) => void;
+
   /** Sağdaki üye listesi paneli açık mı. localStorage'da kalıcı. */
   memberListVisible: boolean;
   /** 'all': çevrimdışılar da görünür. 'online': yalnızca çevrimiçiler. */
@@ -345,6 +354,7 @@ export const useStore = create<AppState>((set) => ({
   activeChannelId: null,
   pendingActiveGuildId: null,
 
+  reportTarget: null,
   memberListVisible: localStorage.getItem('tuscord.memberListVisible') !== 'false',
   memberListMode: localStorage.getItem('tuscord.memberListMode') === 'online' ? 'online' : 'all',
   messageSounds: localStorage.getItem('tuscord.messageSounds') !== 'false',
@@ -377,6 +387,8 @@ export const useStore = create<AppState>((set) => ({
   forcedVoiceChannelInfo: null,
 
   setUser: (user) => set({ user }),
+
+  setReportTarget: (target) => set({ reportTarget: target }),
 
   setMemberListVisible: (visible) => {
     localStorage.setItem('tuscord.memberListVisible', String(visible));

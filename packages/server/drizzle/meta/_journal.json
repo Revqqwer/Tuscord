@@ -57,6 +57,27 @@
       "when": 1787124135582,
       "tag": "0007_cool_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787354672622,
+      "tag": "0008_jittery_vision",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787358293295,
+      "tag": "0009_windy_skreet",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787394878986,
+      "tag": "0010_vengeful_orphan",
+      "breakpoints": true
     }
   ]
 }

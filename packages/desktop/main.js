@@ -8,10 +8,21 @@
  */
 
 const path = require('node:path');
-const { app, BrowserWindow, Menu, shell, desktopCapturer, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, Tray, shell, desktopCapturer, ipcMain } = require('electron');
 
 const APP_URL = 'https://tuscord.com';
 const ICON_PATH = path.join(__dirname, 'build', 'icon.ico');
+
+/** Ana pencere referansı — tray menüsünden geri açabilmek için modül seviyesinde. */
+let mainWindow = null;
+let tray = null;
+/**
+ * Çarpıya basmak PENCEREYİ gizler, uygulamayı KAPATMAZ (bkz. kullanıcı
+ * isteği: "Discord/WhatsApp gibi arka planda çalışsın, malware gibi
+ * algılama"). Gerçek çıkış yalnızca tray menüsündeki "Çıkış"tan — o zaman
+ * bu bayrak true olur ve pencerenin 'close' dinleyicisi engellemeyi bırakır.
+ */
+let isQuitting = false;
 
 /** Yalnızca tuscord.com içindeki gezinmelere izin ver — başka her şey (dış
  * bağlantılar, hukuki sayfalar dahil) sistem tarayıcısında açılsın. Bu hem
@@ -64,6 +75,17 @@ function createWindow() {
     void shell.openExternal(url);
   });
 
+  // Çarpıya basınca gerçekten kapatma — gizle. Bildirimler/sesli kanal gibi
+  // şeylerin arka planda çalışmaya devam etmesi için (bkz. dosya başı yorumu).
+  win.on('close', (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    win.hide();
+  });
+  win.on('closed', () => {
+    mainWindow = null;
+  });
+
   // Mikrofon/kamera/ekran paylaşımı izinleri — ses kanalları ve ekran
   // paylaşımı için gerekli (bkz. lib/voice.ts getUserMedia/getDisplayMedia).
   win.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
@@ -91,7 +113,42 @@ function createWindow() {
   });
 
   void win.loadURL(APP_URL);
+  mainWindow = win;
   return win;
+}
+
+/**
+ * Sistem tepsisi ikonu — Discord/WhatsApp'ta olduğu gibi, pencere
+ * kapatılınca (gizlenince) uygulamaya geri dönüş yeri. Tıklamak pencereyi
+ * geri açar; sağ tık menüsündeki "Çıkış" GERÇEK kapanışı tetikler.
+ */
+function createTray() {
+  tray = new Tray(ICON_PATH);
+  tray.setToolTip('Tuscord');
+
+  const showWindow = () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  };
+
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Tuscord'u Aç", click: showWindow },
+      { type: 'separator' },
+      {
+        label: 'Çıkış',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        },
+      },
+    ]),
+  );
+  // Tek tık (Windows'ta standart davranış) de pencereyi öne getirsin —
+  // sağ tık menüsünü açmaya zorlamayalım.
+  tray.on('click', showWindow);
 }
 
 /** O an açık seçici penceresinin seçim/iptal sonucunu bekleyen çözümleyici —
@@ -181,12 +238,22 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   enableAutoLaunch();
   createWindow();
+  createTray();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
+// Pencere artık kapanınca DEĞİL, tray'den "Çıkış" seçilince kapanıyor (bkz.
+// win.on('close') ve createTray) — bu olay normal akışta neredeyse hiç
+// tetiklenmez, yalnızca gerçek çıkışın son adımı olarak kalıyor.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// Sistem kapanışı/oturum kapatma gibi Electron dışından gelen çıkış
+// isteklerinde de pencere 'close' dinleyicisi engellemeye devam etmesin.
+app.on('before-quit', () => {
+  isQuitting = true;
 });

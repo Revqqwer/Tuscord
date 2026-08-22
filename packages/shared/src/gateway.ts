@@ -361,7 +361,7 @@ export interface GuildDeletePayload {
 }
 
 export interface ForceLogoutPayload {
-  reason: 'account_banned' | 'account_deleted';
+  reason: 'account_banned' | 'account_deleted' | 'account_suspended';
 }
 
 /** Olay adı → yük tipi. İstemcideki olay yönlendiricisi bunu kullanır. */

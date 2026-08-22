@@ -24,6 +24,7 @@ import {
 import { Errors } from '../lib/errors.js';
 import { nextId } from '../lib/id.js';
 import { userId } from '../app.js';
+import { maybeAutoSuspend, resolveReportTargetUserId } from '../services/suspension.js';
 import {
   assertCanManageMember,
   assertPermission,
@@ -426,6 +427,10 @@ export async function moderationRoutes(app: FastifyInstance): Promise<void> {
 
     const targetId = BigInt(body.targetId);
 
+    if (body.targetType === 'user' && targetId === me) {
+      throw Errors.badRequest('cannot_report_self', 'Kendini raporlayamazsın');
+    }
+
     // Rapor edilen içeriğin anlık kopyası: içerik sonradan silinse de
     // moderatör neyin rapor edildiğini görebilmeli.
     let snapshot: unknown = null;
@@ -442,6 +447,8 @@ export async function moderationRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    const resolvedUserId = resolveReportTargetUserId(body.targetType, targetId, snapshot);
+
     const id = nextId();
     await db.insert(reports).values({
       id,
@@ -450,7 +457,13 @@ export async function moderationRoutes(app: FastifyInstance): Promise<void> {
       targetId,
       reason: body.reason,
       snapshot,
+      resolvedUserId,
     });
+
+    // Eşik aşıldıysa hesabı otomatik askıya alır — bkz. services/suspension.ts.
+    // Raporun kendisi başarıyla kaydedildi, bu adım arka planda; başarısız
+    // olursa (beklenmez) raporlayan kişiye hata döndürmenin bir anlamı yok.
+    if (resolvedUserId) void maybeAutoSuspend(resolvedUserId).catch(() => undefined);
 
     return reply.status(201).send({ id: id.toString(), status: 'open' });
   });

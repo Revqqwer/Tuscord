@@ -218,7 +218,7 @@ export async function destroyAllSessions(userId: bigint, exceptSessionId?: bigin
  */
 export async function forceLogoutUser(
   userId: bigint,
-  reason: 'account_banned' | 'account_deleted',
+  reason: 'account_banned' | 'account_deleted' | 'account_suspended',
 ): Promise<void> {
   await destroyAllSessions(userId);
   await publishToUsers([userId.toString()], {

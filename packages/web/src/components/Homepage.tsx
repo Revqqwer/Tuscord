@@ -75,7 +75,7 @@ export function Homepage({ onEnter }: Props) {
               {/* Masaüstü uygulaması yayında — Electron kabuğu, web arayüzünü
                   aynen yükler (bkz. packages/desktop). */}
               <a
-                href="/downloads/Tuscord-Setup-0.1.4.exe"
+                href="/api/v1/downloads/desktop"
                 title={t('homepage.downloadLive')}
                 className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
               >

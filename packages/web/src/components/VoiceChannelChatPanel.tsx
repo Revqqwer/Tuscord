@@ -156,14 +156,9 @@ export function VoiceChannelChatPanel({
           const path = `/channels/${message.channelId}/messages/${message.id}/reactions/${encodeURIComponent(emoji)}`;
           void (active ? api.delete(path) : api.put(path)).catch(() => undefined);
         }}
-        onReport={(message) => {
-          const reason = prompt(t('message.reportPrompt'));
-          if (!reason) return;
-          void api
-            .post('/reports', { targetType: 'message', targetId: message.id, reason })
-            .then(() => alert(t('message.reportSent')))
-            .catch(() => undefined);
-        }}
+        onReport={(message) =>
+          useStore.getState().setReportTarget({ targetType: 'message', targetId: message.id })
+        }
       />
       <Composer
         channelId={channelId}

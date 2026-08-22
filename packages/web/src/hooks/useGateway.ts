@@ -286,7 +286,9 @@ export function useGateway(enabled: boolean): void {
           alert(
             data.reason === 'account_deleted'
               ? i18n.t('auth.accountDeleted')
-              : i18n.t('auth.accountBanned'),
+              : data.reason === 'account_suspended'
+                ? i18n.t('auth.accountSuspended')
+                : i18n.t('auth.accountBanned'),
           );
           state.setUser(null);
           break;

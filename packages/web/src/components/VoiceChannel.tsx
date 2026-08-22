@@ -17,6 +17,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowRightLeft,
+  Flag,
   Headphones,
   Keyboard,
   Lock,
@@ -175,6 +176,13 @@ export function VoiceChannelItem({
               menuParticipant.user.displayName ?? menuParticipant.user.username,
             ),
         },
+        {
+          label: t('voice.reportUser'),
+          icon: <Flag size={15} />,
+          danger: true,
+          onClick: () =>
+            useStore.getState().setReportTarget({ targetType: 'user', targetId: menuParticipant.user.id }),
+        },
       ]
     : [];
 
@@ -307,7 +315,7 @@ export function VoiceChannelItem({
                 }`}
               >
                 <span
-                  className={`shrink-0 rounded-full ${
+                  className={`inline-flex shrink-0 rounded-full ${
                     isSpeaking ? 'ring-2 ring-[var(--color-online)]' : 'ring-2 ring-transparent'
                   }`}
                 >

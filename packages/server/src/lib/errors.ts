@@ -29,8 +29,11 @@ export const Errors = {
   unauthorized: (code = 'unauthorized', message = 'Giriş yapmalısın') =>
     new APIException(401, code, message),
 
-  forbidden: (code = 'missing_permissions', message = 'Bu işlem için yetkin yok') =>
-    new APIException(403, code, message),
+  forbidden: (
+    code = 'missing_permissions',
+    message = 'Bu işlem için yetkin yok',
+    fields?: Record<string, string>,
+  ) => new APIException(403, code, message, fields),
 
   /** Görme izni olmayan kaynaklar için de bunu kullan — varlık bilgisi sızdırma. */
   notFound: (code = 'not_found', message = 'Bulunamadı') => new APIException(404, code, message),

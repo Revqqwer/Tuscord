@@ -11,6 +11,8 @@ import { ChatShell } from './components/ChatShell';
 import { Homepage } from './components/Homepage';
 import { InviteScreen } from './components/InviteScreen';
 import { ResetPasswordScreen } from './components/ResetPasswordScreen';
+import { SupportScreen } from './components/SupportScreen';
+import { VerifyEmailScreen } from './components/VerifyEmailScreen';
 import { WalrusLoader } from './components/WalrusLoader';
 import { isDesktopApp } from './lib/platform';
 
@@ -59,6 +61,25 @@ function resetTokenFromUrl(): string | null {
 }
 
 /**
+ * Kayıt doğrulama e-postasındaki bağlantı buraya düşer (bkz. server
+ * auth.ts: `${WEB_ORIGIN}/dogrula?token=...`). Giriş yapmış olsan bile
+ * çalışır — token kendi başına doğrulamayı yapar, oturuma bağlı değil.
+ */
+function verifyTokenFromUrl(): string | null {
+  if (!/^\/dogrula\/?$/.test(location.pathname)) return null;
+  return new URLSearchParams(location.search).get('token');
+}
+
+/**
+ * Destek e-postalarındaki ("Destek talebi aç" / "Destek sayfasına git")
+ * bağlantı buraya düşer (bkz. server mail.ts suspensionMail/ticketReplyMail).
+ * Giriş yapmış/yapmamış fark etmez — ticket oturumsuz gönderilebilir.
+ */
+function wantsSupportScreen(): boolean {
+  return /^\/destek\/?$/.test(location.pathname);
+}
+
+/**
  * Bot davet linki: `/bot-ekle/<applicationId>?permissions=<bitfield>` (bkz.
  * DeveloperPortal'daki link üreteci). Giriş şart — davet ekranından farklı
  * olarak burada anonim önizleme yok, doğrudan giriş isteniyor (bkz. render'daki
@@ -96,6 +117,10 @@ export function App() {
   /** Davet ekranındaki "Giriş yap ve katıl" ile buraya geldik mi (bkz. InviteScreen.tsx autoJoin). */
   const [inviteWantsAuth, setInviteWantsAuth] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(() => resetTokenFromUrl());
+  const [verifyToken, setVerifyToken] = useState<string | null>(() => verifyTokenFromUrl());
+  const [showSupport, setShowSupport] = useState(() => wantsSupportScreen());
+  /** Askıya alınmış bir hesap giriş denediğinde dolar (bkz. AuthScreen onSuspended). */
+  const [suspendedInfo, setSuspendedInfo] = useState<{ email: string; until: string } | null>(null);
   const [botInvite, setBotInvite] = useState(() => botInviteFromUrl());
   const [showAdminStats, setShowAdminStats] = useState(() => wantsAdminStats());
   /**
@@ -120,6 +145,8 @@ export function App() {
     const onPopState = () => {
       setInviteToken(inviteTokenFromPath());
       setResetToken(resetTokenFromUrl());
+      setVerifyToken(verifyTokenFromUrl());
+      setShowSupport(wantsSupportScreen());
       setBotInvite(botInviteFromUrl());
       setShowAdminStats(wantsAdminStats());
       setShowAuth(wantsAuthScreen() || isDesktopApp());
@@ -160,9 +187,50 @@ export function App() {
     return (
       <ResetPasswordScreen
         token={resetToken}
+        requireCurrentPassword={user !== null}
         onDone={() => {
+          // Parola değişince sunucu TÜM oturumları düşürür (bkz. auth.ts) —
+          // kendi cihazımız da dahil. Yerel durumu da temizlemezsek eski
+          // (artık geçersiz) oturumla ChatShell'e düşüp ilk API çağrısında
+          // 401 patlardı.
+          setUser(null);
           history.pushState({}, '', '/login');
           setResetToken(null);
+          setShowAuth(true);
+        }}
+      />
+    );
+  }
+
+  if (suspendedInfo) {
+    return (
+      <SupportScreen
+        initialEmail={suspendedInfo.email}
+        suspendedUntil={suspendedInfo.until}
+        onClose={() => setSuspendedInfo(null)}
+      />
+    );
+  }
+
+  if (showSupport) {
+    return (
+      <SupportScreen
+        initialEmail={user?.email}
+        onClose={() => {
+          if (wantsSupportScreen()) history.pushState({}, '', '/');
+          setShowSupport(false);
+        }}
+      />
+    );
+  }
+
+  if (verifyToken) {
+    return (
+      <VerifyEmailScreen
+        token={verifyToken}
+        onLogin={() => {
+          history.pushState({}, '', '/login');
+          setVerifyToken(null);
           setShowAuth(true);
         }}
       />
@@ -234,7 +302,14 @@ export function App() {
   }
 
   if (!user) {
-    if (showAuth) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+    if (showAuth) {
+      return (
+        <AuthScreen
+          onAuthenticated={handleAuthenticated}
+          onSuspended={(email, until) => setSuspendedInfo({ email, until })}
+        />
+      );
+    }
     return <Homepage onEnter={enterAuthScreen} />;
   }
 

@@ -1,0 +1,12 @@
+name = "tuscord-inbound-email"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+account_id = "2259a5a4ab75910f921a4fd4e6a2e034"
+# Email Worker'lar HTTP route'a ihtiyaç duymaz (Email Routing kuralı adına
+# göre doğrudan çağırır) — ama wrangler deploy en az bir "tetikleyici yüzey"
+# istiyor, en zararsızı workers.dev alt alan adı (kullanılmayacak, sadece
+# deploy'un kabul etmesi için).
+workers_dev = true
+
+# INBOUND_EMAIL_SECRET buraya YAZILMAZ — gizli, `wrangler secret put
+# INBOUND_EMAIL_SECRET` ile ayrı eklenir (bkz. README.md).
