@@ -32,15 +32,22 @@ declare module 'fastify' {
 /**
  * Oturumu zorunlu kılmadan çözer — herkese açık uçlarda kullanıcıyı tanımak için.
  *
- * İki kimlik kaynağı: insan tarayıcısı için `SESSION_COOKIE`, bot istemcileri
- * için `Authorization: Bot <token>` header'ı — Discord'daki `Bot <token>`
- * biçimiyle bilinçli olarak aynı, bot geliştirenler için tanıdık.
+ * Üç kimlik kaynağı: web tarayıcısı için `SESSION_COOKIE`, bot istemcileri
+ * için `Authorization: Bot <token>` header'ı (Discord'daki `Bot <token>`
+ * biçimiyle bilinçli olarak aynı), mobil uygulama için `Authorization: Bearer
+ * <token>` — React Native'in WebSocket el sıkışmasında cookie jar'ı tutarlı
+ * göndermemesi yüzünden mobil, login'de dönen ham token'ı kendisi saklayıp
+ * her istekte açıkça taşıyor (bkz. routes/auth.ts login/register yanıtı).
  */
 export async function attachSession(request: FastifyRequest): Promise<void> {
   if (request.session) return;
   const authHeader = request.headers.authorization;
-  const botToken = authHeader?.startsWith('Bot ') ? authHeader.slice(4).trim() : null;
-  const token = botToken || request.cookies[SESSION_COOKIE];
+  const headerToken = authHeader?.startsWith('Bot ')
+    ? authHeader.slice(4).trim()
+    : authHeader?.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : null;
+  const token = headerToken || request.cookies[SESSION_COOKIE];
   if (!token) return;
   const session = await resolveAnyToken(token);
   if (session) request.session = session;

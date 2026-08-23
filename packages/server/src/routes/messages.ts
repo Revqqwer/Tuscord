@@ -34,6 +34,7 @@ import { assertCanSend, requireMessageChannel } from '../services/channelAccess.
 import { requireGuildAccess, visibleChannels } from '../services/permissions.js';
 import { parseMentions, violatesWordFilter } from '../services/mentions.js';
 import { publishChannelEvent } from '../services/events.js';
+import { sendPushToUsers } from '../services/push.js';
 import { toAPIMessage } from '../services/serialize.js';
 import { writeAuditLog } from '../services/audit.js';
 import { optionalSnowflake, snowflakeParam } from '../lib/validate.js';
@@ -230,6 +231,16 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
       },
       access.recipients.map((r) => r.toString()),
     );
+
+    // Fire-and-forget: push gönderimi mesaj cevabını geciktirmesin, ayrıca
+    // bir kullanıcının kayıtlı cihazı yoksa (mobil kullanmıyorsa) sorunsuzca
+    // no-op olur (bkz. services/push.ts).
+    const recipientsExceptAuthor = access.recipients.filter((r) => r !== me).map((r) => r.toString());
+    void sendPushToUsers(recipientsExceptAuthor, {
+      title: payload!.author.displayName ?? payload!.author.username,
+      body: content || 'bir dosya gönderdi',
+      data: { channelId: channelId.toString(), guildId: access.guildId?.toString() ?? null },
+    }).catch((error) => request.log.error({ error }, 'push bildirimi gönderilemedi'));
 
     return reply.status(201).send(payload);
   });
