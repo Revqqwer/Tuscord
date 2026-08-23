@@ -175,6 +175,14 @@ export const guilds = pgTable(
     /** Raid koruması: hesap yaşı (saat) ve doğrulanmış e-posta zorunluluğu. */
     minAccountAgeHours: integer('min_account_age_hours').notNull().default(0),
     requireVerifiedEmail: boolean('require_verified_email').notNull().default(false),
+    /**
+     * Deneysel: sesli kanallarda ekran paylaşımını LiveKit'in varsayılan
+     * (~1080p/15fps) yerine daha yüksek bitrate/fps ile yayınlar (bkz.
+     * voice.ts startScreenShare). İleride ücretli bir "premium" paket
+     * olarak sunulması planlanıyor — şimdilik yalnızca seçili sunucularda,
+     * elle açılan bir bayrak.
+     */
+    premiumVoiceQuality: boolean('premium_voice_quality').notNull().default(false),
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [
@@ -642,6 +650,26 @@ export const desktopDownloads = pgTable(
 );
 
 /**
+ * Mobil push bildirim token'ları (Expo push token) — bkz. services/push.ts.
+ * `token` unique: aynı cihaz hesap değiştirirse (çıkış/başka hesapla giriş)
+ * eski satır yeni userId'ye güncellenir (onConflictDoUpdate), aynı cihaza
+ * iki kullanıcı adına bildirim gitmesin diye.
+ */
+export const pushTokens = pgTable(
+  'push_tokens',
+  {
+    id: snowflake('id').primaryKey(),
+    userId: snowflake('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: varchar('token', { length: 255 }).notNull(),
+    platform: varchar('platform', { length: 16 }).notNull(),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('push_tokens_token_idx').on(t.token), index('push_tokens_user_idx').on(t.userId)],
+);
+
+/**
  * Gün başına en yüksek eşzamanlı aktif (gateway'e bağlı) kullanıcı sayısı —
  * admin panelindeki "Genel bakış" sekmesi için (bkz. services/activeUserPeaks.ts).
  * Tüm zamanların rekoru, bu tablodaki TÜM satırların MAX'ı olarak hesaplanır
@@ -668,6 +696,7 @@ export type Invite = typeof invites.$inferSelect;
 export type Report = typeof reports.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;
 export type DesktopDownload = typeof desktopDownloads.$inferSelect;
+export type PushToken = typeof pushTokens.$inferSelect;
 export type TicketMessage = typeof ticketMessages.$inferSelect;
 export type AuditLogRow = typeof auditLog.$inferSelect;
 export type ActiveUserPeak = typeof activeUserPeaks.$inferSelect;

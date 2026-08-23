@@ -128,6 +128,8 @@ export interface APIGuild {
   description: string | null;
   systemChannelId: Snowflake | null;
   createdAt: string;
+  /** Deneysel/premium: açıksa ekran paylaşımı daha yüksek bitrate/fps ile yayınlanır. */
+  premiumVoiceQuality: boolean;
 }
 
 export interface APIGuildMember {

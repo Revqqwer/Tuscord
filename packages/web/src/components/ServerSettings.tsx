@@ -66,6 +66,7 @@ export function ServerSettings({ guildState, onClose }: Props) {
         description: description || null,
       });
       upsertGuild({ ...guildState, guild: updated, voiceStates: [] });
+      onClose();
     } catch {
       setError(t('guildModal.errors.guild_name_taken'));
     } finally {

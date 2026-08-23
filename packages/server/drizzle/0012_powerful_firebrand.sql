@@ -1,0 +1,1 @@
+ALTER TABLE "guilds" ADD COLUMN "premium_voice_quality" boolean DEFAULT false NOT NULL;
