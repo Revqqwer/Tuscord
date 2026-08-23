@@ -14,12 +14,21 @@
  * routes/channels.ts POST /channels/:id/voice-token, CONNECT izni gerektirir).
  */
 
-import { Room, RoomEvent, Track, type RemoteTrack, type RemoteParticipant } from 'livekit-client';
+import {
+  Room,
+  RoomEvent,
+  ScreenSharePresets,
+  Track,
+  type LocalAudioTrack,
+  type RemoteTrack,
+  type RemoteParticipant,
+} from 'livekit-client';
 import { GatewayOp, type VoiceStateUpdatePayload } from '@tuscord/shared';
 import { gateway } from './gateway';
 import { api } from './api';
 import { useStore } from '../store';
 import { playVoiceChime, suppressChimesForCatchUp } from './voiceChime';
+import { RnnoiseProcessor } from './rnnoiseProcessor';
 
 /**
  * Kullanıcının 0-100 hassasiyet ayarını (bkz. UserSettings.tsx "Ses" sekmesi)
@@ -102,6 +111,7 @@ class VoiceManager {
     // tuş basılı olmadan mikrofon açık kalmasın diye hemen uygula.
     this.applyLocalAudioEnabled();
     this.setupSpeakingDetection();
+    void this.applyNoiseSuppression(store.noiseSuppression);
 
     // Kalabalık bir kanala girince sunucunun gönderdiği "mevcut durum"
     // yakalama paketleri katılma OLAYI sayılıp art arda ses çalmasın.
@@ -167,13 +177,35 @@ class VoiceManager {
 
   /* -------- Cihaz seçimi / gürültü engelleme (bkz. UserSettings.tsx "Ses" sekmesi) -------- */
 
-  private micConstraints(): { deviceId?: { exact: string }; echoCancellation: boolean; noiseSuppression: boolean } {
+  private micConstraints(): { deviceId?: { exact: string }; echoCancellation: boolean } {
     const store = useStore.getState();
     return {
       ...(store.inputDeviceId ? { deviceId: { exact: store.inputDeviceId } } : {}),
       echoCancellation: true,
-      noiseSuppression: store.noiseSuppression,
+      // Gürültü engelleme artık tarayıcının yerleşik constraint'i değil,
+      // RNNoise (WASM) işlemcisiyle yapılıyor — bkz. applyNoiseSuppression.
     };
+  }
+
+  /**
+   * RNNoise işlemcisini mikrofon izine takar/çıkarır — `Track.setProcessor`
+   * @experimental olsa da livekit-client 2.x'te stabil çalışıyor (bkz.
+   * rnnoiseProcessor.ts). Bağlı değilsem veya iz henüz yoksa sessizce
+   * no-op; bir sonraki `join()`/`setMicrophoneEnabled` çağrısı zaten yeni
+   * izi oluştururken bu fonksiyonu tekrar çağırır.
+   */
+  private async applyNoiseSuppression(enabled: boolean): Promise<void> {
+    const track = this.room?.localParticipant.getTrackPublication(Track.Source.Microphone)
+      ?.track as LocalAudioTrack | undefined;
+    if (!track) return;
+    try {
+      if (enabled) await track.setProcessor(new RnnoiseProcessor());
+      else await track.stopProcessor();
+    } catch {
+      // WASM/AudioWorklet yüklenemedi (ör. eski tarayıcı) — sessizce
+      // tarayıcının varsayılan ham mikrofon izinde kal, kullanıcıyı
+      // bir hata diyaloğuyla rahatsız etmeye değmez.
+    }
   }
 
   /**
@@ -208,8 +240,7 @@ class VoiceManager {
    */
   setNoiseSuppression(enabled: boolean): void {
     useStore.getState().setNoiseSuppression(enabled);
-    const track = this.room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
-    if (track) void track.mediaStreamTrack.applyConstraints({ noiseSuppression: enabled }).catch(() => undefined);
+    void this.applyNoiseSuppression(enabled);
   }
 
   /* -------- Mikrofon / kulaklık -------- */
@@ -299,6 +330,7 @@ class VoiceManager {
     useStore.getState().setActive(guildId, channelId);
     this.applyLocalAudioEnabled();
     this.setupSpeakingDetection();
+    void this.applyNoiseSuppression(useStore.getState().noiseSuppression);
     suppressChimesForCatchUp();
     if (!useStore.getState().selfDeaf) playVoiceChime('join');
   }
@@ -431,14 +463,41 @@ class VoiceManager {
 
   /* -------- Ekran paylaşımı -------- */
 
+  /**
+   * Şu an bağlı olduğum kanalın sunucusunda `premiumVoiceQuality` açık mı —
+   * bkz. schema.ts yorumu: ileride ücretli bir pakete dönüşmesi planlanan
+   * deneysel bayrak. Kanal → sunucu eşlemesi VoiceChannel.tsx'teki ile aynı
+   * yöntemle: guilds map'inde bu channelId'yi içeren sunucuyu ara.
+   */
+  private hasPremiumVoiceQuality(): boolean {
+    if (!this.channelId) return false;
+    for (const g of useStore.getState().guilds.values()) {
+      if (g.channels.some((c) => c.id === this.channelId)) return g.guild.premiumVoiceQuality;
+    }
+    return false;
+  }
+
   async startScreenShare(): Promise<void> {
     if (!this.room || this.screenStream) return;
+    // Varsayılan (LiveKit'in kendi otomatik seçimi) tipik bir 1080p ekranda
+    // ~2.5 Mbps/15fps'e denk geliyor — premium sunucularda bunu 5 Mbps/30fps'e
+    // (h1080fps30) çıkarıyoruz. `original` (7 Mbps, ölçeklemesiz) değil:
+    // LiveKit sunucumuz halihazırda CPU sınırına yakın (bkz. yük testi
+    // bulguları), tek bir sunucuda deneysel bir bayrak için sunucu genelini
+    // riske atmaya değmez.
+    const publishOptions = this.hasPremiumVoiceQuality()
+      ? { videoEncoding: ScreenSharePresets.h1080fps30.encoding }
+      : undefined;
     let publication;
     try {
-      publication = await this.room.localParticipant.setScreenShareEnabled(true, {
-        video: true,
-        audio: true, // Chrome sekme/sistem sesini de paylaşabilir; varsa gönderilir.
-      });
+      publication = await this.room.localParticipant.setScreenShareEnabled(
+        true,
+        {
+          video: true,
+          audio: true, // Chrome sekme/sistem sesini de paylaşabilir; varsa gönderilir.
+        },
+        publishOptions,
+      );
     } catch {
       return; // Kullanıcı iptal etti.
     }

@@ -29,6 +29,21 @@ import { logTraffic } from '../services/compliance.js';
 import { toAPIAttachment } from '../services/serialize.js';
 import { snowflakeParam } from '../lib/validate.js';
 
+/**
+ * `Content-Disposition` başlık DEĞERİ Node'un http modülünde Latin-1'e
+ * kısıtlı — Türkçe karakterler (ı, ğ, ş, ç, ö, ü, İ gibi Latin-1 dışına
+ * taşanlar) ham hâlde konursa `ERR_INVALID_CHAR` ile 500 patlıyordu.
+ * RFC 6266/5987: ASCII bir `filename` (uyumluluk için, UTF-8 olmayan
+ * karakterler `_`'e çevrilir) YANINDA yüzde-kodlanmış UTF-8 `filename*`
+ * verilir — destekleyen tüm tarayıcılar ikincisini kullanıp orijinal adı
+ * gösterir.
+ */
+function contentDispositionAttachment(filename: string): string {
+  const asciiFallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'");
+  const encoded = encodeURIComponent(filename);
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
+
 /** Nesne anahtarının uzantısından güvenli görsel MIME tipi. */
 function mimeFromExtension(key: string): string {
   const ext = key.slice(key.lastIndexOf('.') + 1).toLowerCase();
@@ -156,7 +171,7 @@ export async function attachmentRoutes(app: FastifyInstance): Promise<void> {
     return reply
       .header('Content-Type', row.contentType)
       // Dosya origin üzerinde çalıştırılmasın diye indirmeye zorlanır.
-      .header('Content-Disposition', `attachment; filename="${row.filename}"`)
+      .header('Content-Disposition', contentDispositionAttachment(row.filename))
       .header('X-Content-Type-Options', 'nosniff')
       .header('Cache-Control', 'private, max-age=31536000, immutable')
       .send(body);

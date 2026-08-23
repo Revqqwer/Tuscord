@@ -63,6 +63,7 @@ export function toAPIGuild(guild: Guild): APIGuild {
     description: guild.description,
     systemChannelId: guild.systemChannelId?.toString() ?? null,
     createdAt: guild.createdAt.toISOString(),
+    premiumVoiceQuality: guild.premiumVoiceQuality,
   };
 }
 
