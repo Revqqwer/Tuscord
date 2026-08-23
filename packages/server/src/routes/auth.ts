@@ -152,6 +152,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     reply.setCookie(SESSION_COOKIE, session.token, sessionCookieOptions(session.expiresAt));
     return reply.status(201).send({
+      // Web bunu asla okumaz (cookie yeterli) — yalnızca mobil uygulama
+      // Authorization: Bearer için saklar (bkz. app.ts attachSession).
+      token: session.token,
       user: {
         id: id.toString(),
         username: body.username,
@@ -220,6 +223,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     reply.setCookie(SESSION_COOKIE, session.token, sessionCookieOptions(session.expiresAt));
     return reply.send({
+      token: session.token,
       user: toSelfUser({
         id: user.id,
         username: user.username,
@@ -238,7 +242,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/auth/logout', async (request, reply) => {
-    const token = request.cookies[SESSION_COOKIE];
+    const authHeader = request.headers.authorization;
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+    const token = bearerToken || request.cookies[SESSION_COOKIE];
     if (token) {
       await destroySession(token);
       await logTraffic({ eventType: 'logout', ip: requestIp(request) });

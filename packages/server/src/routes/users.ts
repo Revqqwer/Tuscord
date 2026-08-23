@@ -13,6 +13,7 @@ import {
   guildMembers,
   guilds,
   messages,
+  pushTokens,
   readStates,
   users,
 } from '../db/schema.js';
@@ -68,6 +69,36 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
         isAdmin: updated!.isAdmin,
       }),
     );
+  });
+
+  /**
+   * Mobil push token kaydı (Expo push token) — bkz. services/push.ts.
+   * `token` unique olduğu için onConflictDoUpdate: aynı cihaz başka bir
+   * hesapla giriş yaparsa satır o hesaba geçer, eski sahibine bildirim
+   * gitmeye devam etmez.
+   */
+  app.post('/users/@me/push-tokens', async (request, reply) => {
+    const me = userId(request);
+    const body = z
+      .object({ token: z.string().min(1).max(255), platform: z.enum(['ios', 'android']) })
+      .parse(request.body);
+
+    await db
+      .insert(pushTokens)
+      .values({ id: nextId(), userId: me, token: body.token, platform: body.platform })
+      .onConflictDoUpdate({
+        target: pushTokens.token,
+        set: { userId: me, platform: body.platform },
+      });
+
+    return reply.status(204).send();
+  });
+
+  /** Çıkış yapılan cihazda bildirim almaya devam etmesin. */
+  app.delete('/users/@me/push-tokens', async (request, reply) => {
+    const body = z.object({ token: z.string().min(1).max(255) }).parse(request.body);
+    await db.delete(pushTokens).where(eq(pushTokens.token, body.token));
+    return reply.status(204).send();
   });
 
   /**
