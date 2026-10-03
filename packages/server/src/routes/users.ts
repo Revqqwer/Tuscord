@@ -16,6 +16,7 @@ import {
   pushTokens,
   readStates,
   users,
+  webPushSubscriptions,
 } from '../db/schema.js';
 import { Errors } from '../lib/errors.js';
 import { nextId } from '../lib/id.js';
@@ -27,6 +28,8 @@ import { toAPIChannel, toAPIGuild, toPublicUser, toSelfUser } from '../services/
 import { detectFileType } from '../services/fileType.js';
 import { generateObjectKey, storage } from '../services/storage.js';
 import { snowflakeParam } from '../lib/validate.js';
+import { env } from '../env.js';
+import { webPushEnabled } from '../services/webPush.js';
 
 export async function userRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', app.requireAuth);
@@ -98,6 +101,55 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
   app.delete('/users/@me/push-tokens', async (request, reply) => {
     const body = z.object({ token: z.string().min(1).max(255) }).parse(request.body);
     await db.delete(pushTokens).where(eq(pushTokens.token, body.token));
+    return reply.status(204).send();
+  });
+
+  /**
+   * Tarayıcı Web Push için VAPID genel anahtarı — herkese açık, kimlik
+   * doğrulama gerektirmez (public key zaten gizli değil, `pushManager.
+   * subscribe()`'a bununla geçilir, bkz. services/webPush.ts). Özellik
+   * kapalıysa (env eksikse) istemci bunu görüp aboneliği hiç denemesin.
+   */
+  app.get('/push/vapid-public-key', async (_request, reply) => {
+    if (!webPushEnabled) throw Errors.notFound('web_push_disabled', 'Web push yapılandırılmadı');
+    return reply.send({ publicKey: env.VAPID_PUBLIC_KEY });
+  });
+
+  /**
+   * Tarayıcı Web Push aboneliği kaydı — `PushSubscription.toJSON()`'ın
+   * aynısı. `endpoint` unique: aynı tarayıcı/cihaz başka hesapla giriş
+   * yaparsa satır o hesaba geçer (bkz. push-tokens'taki aynı gerekçe).
+   */
+  app.post('/users/@me/web-push-subscription', async (request, reply) => {
+    const me = userId(request);
+    const body = z
+      .object({
+        endpoint: z.string().url(),
+        keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }),
+      })
+      .parse(request.body);
+
+    await db
+      .insert(webPushSubscriptions)
+      .values({
+        id: nextId(),
+        userId: me,
+        endpoint: body.endpoint,
+        p256dh: body.keys.p256dh,
+        auth: body.keys.auth,
+      })
+      .onConflictDoUpdate({
+        target: webPushSubscriptions.endpoint,
+        set: { userId: me, p256dh: body.keys.p256dh, auth: body.keys.auth },
+      });
+
+    return reply.status(204).send();
+  });
+
+  /** Kullanıcı bildirimleri kapattığında (`unsubscribe()`) çağrılır. */
+  app.delete('/users/@me/web-push-subscription', async (request, reply) => {
+    const body = z.object({ endpoint: z.string().url() }).parse(request.body);
+    await db.delete(webPushSubscriptions).where(eq(webPushSubscriptions.endpoint, body.endpoint));
     return reply.status(204).send();
   });
 

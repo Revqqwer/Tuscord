@@ -10,6 +10,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Copy, Link2, X } from 'lucide-react';
+import { copyText } from '../lib/clipboard';
 
 interface Props {
   url: string;
@@ -21,13 +22,13 @@ export function InviteLinkModal({ url, onClose }: Props) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(url);
+    const ok = await copyText(url);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard API güvenli bağlam/izin isteyebilir; başarısız olursa
-      // metni seçip kullanıcının kendi Ctrl+C'sine bırak.
+    } else {
+      // İkisi de başarısız olursa metni seçip kullanıcının kendi
+      // Ctrl+C'sine bırak.
       const input = document.getElementById('invite-link-input') as HTMLInputElement | null;
       input?.select();
     }

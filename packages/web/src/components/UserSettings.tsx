@@ -15,6 +15,7 @@ import { useStore } from '../store';
 import { setLocale } from '../i18n';
 import { voice, playTestTone, startMicLevelMeter } from '../lib/voice';
 import { gateway } from '../lib/gateway';
+import { unregisterNativePush } from '../lib/nativePush';
 import { Avatar } from './Avatar';
 
 interface Props {
@@ -209,6 +210,7 @@ export function UserSettings({ user, onClose }: Props) {
   }
 
   async function logout() {
+    await unregisterNativePush();
     await api.post('/auth/logout').catch(() => undefined);
     location.reload();
   }
@@ -253,6 +255,7 @@ export function UserSettings({ user, onClose }: Props) {
   async function deleteAccount() {
     if (!confirm(t('profile.deleteConfirm'))) return;
     try {
+      await unregisterNativePush();
       await api.post('/users/@me/delete');
       location.reload();
     } catch (caught) {

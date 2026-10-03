@@ -29,6 +29,24 @@
 		reverse_proxy api:3001
 	}
 
+	# Gizlilik Politikası / Kullanım Koşulları — SPA fallback'e düşmesin,
+	# gerçek sunucu HTML'i dönsün (App Store ve KVKK için).
+	handle /gizlilik {
+		reverse_proxy api:3001
+	}
+
+	handle /kosullar {
+		reverse_proxy api:3001
+	}
+
+	handle /hesap-silme {
+		reverse_proxy api:3001
+	}
+
+	handle /cocuk-guvenligi {
+		reverse_proxy api:3001
+	}
+
 	# Statik istemci (Vite build çıktısı).
 	handle {
 		root * /srv/web

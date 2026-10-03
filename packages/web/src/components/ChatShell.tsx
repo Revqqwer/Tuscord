@@ -34,6 +34,7 @@ import {
   type PublicUser,
 } from '@tuscord/shared';
 import { api } from '../lib/api';
+import { subscribeWebPush } from '../lib/webPush';
 import { useStore, type GuildState } from '../store';
 import { can, channelPermissions } from '../lib/permissions';
 import { initialsFromName } from '../lib/initials';
@@ -325,14 +326,23 @@ export function ChatShell() {
       .catch(() => undefined);
 
     // Bahsetme bildirimleri için izin iste (bir kez). Reddedilirse uygulama
-    // içi rozet yine çalışır, sorun olmaz.
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      const ask = () => {
-        void Notification.requestPermission();
-        window.removeEventListener('click', ask);
-      };
-      // Tarayıcı izni bir kullanıcı jestinde ister; ilk tıklamada sor.
-      window.addEventListener('click', ask, { once: true });
+    // içi rozet yine çalışır, sorun olmaz. İzin zaten (önceki oturumdan)
+    // verilmişse Web Push aboneliğini burada, hemen kaydediyoruz — yeni
+    // izin isteği gerekmez. `subscribeWebPush` sessizce no-op olur (özellik
+    // kapalı/tarayıcı desteklemiyor), bkz. lib/webPush.ts.
+    if (typeof Notification !== 'undefined') {
+      if (Notification.permission === 'granted') {
+        void subscribeWebPush();
+      } else if (Notification.permission === 'default') {
+        const ask = () => {
+          void Notification.requestPermission().then((permission) => {
+            if (permission === 'granted') void subscribeWebPush();
+          });
+          window.removeEventListener('click', ask);
+        };
+        // Tarayıcı izni bir kullanıcı jestinde ister; ilk tıklamada sor.
+        window.addEventListener('click', ask, { once: true });
+      }
     }
   }, []);
 
@@ -429,15 +439,20 @@ export function ChatShell() {
         // iken uygulanır: mount anında transition açık olursa panel ekran
         // dışında olduğu için başlangıç değeri commit edilmiyor ve animasyon
         // `-100%`'de takılıyordu. rAF ile bir frame sonra açıyoruz.
-        style={
-          isMobile
+        // `fixed` konum body'nin `padding-top: env(safe-area-inset-top)`
+        // kuralını miras almıyor (kendi containing block'u viewport) — bu
+        // yüzden burada AYRICA belirtiliyor (bkz. kullanıcı raporu: web app
+        // olarak yüklenince kayar panel başlığı durum çubuğuyla çakışıyordu).
+        style={{
+          ...(isMobile
             ? {
                 transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
                 transition: animateSidebar ? 'transform 200ms ease-out' : 'none',
               }
-            : undefined
-        }
-        className="fixed inset-y-0 left-0 z-40 flex md:static md:z-auto"
+            : undefined),
+          top: 'env(safe-area-inset-top)',
+        }}
+        className="fixed bottom-0 left-0 z-40 flex md:static md:inset-auto md:z-auto"
       >
         <ServerRail onNavigate={() => toggleSidebar(false)} />
         <div className="flex w-60 shrink-0 flex-col bg-[var(--color-surface-1)]">

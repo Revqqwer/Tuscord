@@ -32,10 +32,15 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <!--
-      iOS ana ekran simgesi. PNG bekler; SVG'yi yok sayıp ekran görüntüsü
-      kullanır. Gerçek PNG çıktısı hazırlanana kadar bu bilinçli bir eksik.
+      iOS ana ekran simgesi — PNG bekler (bkz. scripts/generate-pwa-icons.mjs).
+      Ayrı, "-v2" son ekli bir dosya adı KASITLI: iOS ikonu URL'ye göre kendi
+      içinde önbelleğe alıyor (Safari önbelleği/site verisi temizlense bile
+      etkilenmeyebiliyor) ve Cloudflare de eski (bozuk) bir kopyayı bir süre
+      önbellekte tutmuş olabilir — aynı ada kilitli kalmak yerine yeni URL,
+      her iki önbelleği de baştan atlatır. `sizes` iOS'un ikonu daha güvenilir
+      tanımasına yardımcı oluyor.
     -->
-    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/icon-touch-v2.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Tuscord" />

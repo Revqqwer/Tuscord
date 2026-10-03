@@ -13,3 +13,6 @@ packages/desktop/build/*
 coverage/
 .vite/
 packages/server/drizzle/meta/_journal.json.bak
+
+# Masaüstü kurulum dosyaları büyük (80 MB+) — repoya girmez, sunucuya doğrudan konur
+packages/web/public/downloads/*.exe

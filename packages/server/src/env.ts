@@ -71,11 +71,38 @@ const schema = z.object({
   LIVEKIT_API_SECRET: z.string().optional(),
   LIVEKIT_URL: z.string().optional(),
 
+  /** Web Push (VAPID) — ikisi de yoksa /push/vapid-public-key 503 döner. */
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().default('mailto:destek@tuscord.com'),
+
   /** Cloudflare Email Worker'ın gelen mailleri POST ederken taşıdığı paylaşılan sır. */
   INBOUND_EMAIL_SECRET: z.string().optional(),
 
   TRAFFIC_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   ABUSE_CONTACT_EMAIL: z.string().default('abuse@localhost'),
+
+  /**
+   * iOS push (APNs) — hepsi yoksa sendApnsPush sessizce atlar (bkz.
+   * services/apns.ts). Anahtar iki yoldan biriyle verilebilir:
+   *  - APNS_KEY_P8_PATH: sunucudaki `.p8` dosyasının yolu (TERCİH EDİLEN —
+   *    anahtar hiçbir zaman .env içinde düz metin olarak durmaz).
+   *  - APNS_KEY_P8: PEM içeriği tek satırda, satır sonları `\n` kaçışıyla
+   *    (yalnızca dosya yolu vermek mümkün değilse).
+   */
+  APNS_KEY_P8_PATH: z.string().optional(),
+  APNS_KEY_P8: z.string().optional(),
+  APNS_KEY_ID: z.string().optional(),
+  APNS_TEAM_ID: z.string().optional(),
+  APNS_BUNDLE_ID: z.string().default('com.tuscord.app'),
+  APNS_ENVIRONMENT: z.enum(['production', 'sandbox']).default('production'),
+
+  /**
+   * Android push (FCM HTTP v1) — Firebase servis hesabı JSON dosyasının yolu
+   * (örn. /app/secrets/fcm-service-account.json). Yoksa Android push atlanır.
+   * Dosya `.env`'e değil, salt-okunur bağlanan secrets klasörüne konur.
+   */
+  FCM_SERVICE_ACCOUNT_PATH: z.string().optional(),
 
   /**
    * Virgülle ayrılmış IP listesi — bu IP'ler için hız sınırı UYGULANMAZ.

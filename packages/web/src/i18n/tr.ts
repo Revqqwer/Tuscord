@@ -10,9 +10,19 @@ export const tr = {
     headline: 'Arkadaşlarınla sohbet etmenin en rahat yolu',
     subtitle:
       'Tuscord; metin, sesli sohbet ve ekran paylaşımını tek yerde toplar. Bir sunucu kur, davet linkini paylaş, konuşmaya başla.',
-    downloadWindows: 'Windows için indir',
+    downloadWindows: 'Exe olarak indir',
     openInBrowser: "Tuscord'u tarayıcıda aç",
     downloadLive: 'Şimdi yayında',
+    installAlternative: 'Web App olarak indir',
+    nonExe: 'Non Exe',
+    installApp: 'Uygulamayı indir',
+    iosInstallTitle: 'Tuscord’u yükle',
+    iosInstallStep1: "Alttaki Paylaş (□↑) simgesine dokun.",
+    androidInstallStep1: 'Sağ üstteki ⋮ menüsüne dokun.',
+    iosInstallStep2: "Açılan listeden 'Ana Ekrana Ekle'yi seç.",
+    desktopInstallHint: 'Adres çubuğunun sağındaki yükleme simgesine (⊕) tıkla.',
+    desktopInstallAlreadyHint:
+      'Simge görünmüyorsa Tuscord muhtemelen zaten yüklü — chrome://apps adresinden kontrol edebilirsin.',
   },
   auth: {
     loginTitle: 'Tekrar hoş geldin',
@@ -30,6 +40,9 @@ export const tr = {
     rememberMe: 'Beni oturumda tut',
     showPassword: 'Parolayı göster',
     hidePassword: 'Parolayı gizle',
+    acceptTermsPrefix: '',
+    acceptTermsAnd: 've',
+    acceptTermsSuffix: "'nı okudum, kabul ediyorum.",
     sessionInvalidated: 'Başka bir yerden (tarayıcı veya masaüstü uygulaması) giriş yapıldığı için oturumun kapatıldı.',
     accountDeleted: 'Hesabın bir yönetici tarafından silindi.',
     accountBanned: 'Hesabın bir yönetici tarafından yasaklandı.',
@@ -65,6 +78,7 @@ export const tr = {
       username_required: 'Kullanıcı adını gir',
       username_invalid: 'Kullanıcı adı {{min}}-{{max}} karakter olmalı; yalnızca küçük harf, rakam, _ ve . kullanılabilir',
       username_taken: 'Bu kullanıcı adı dolu, başka bir tane dene',
+      terms_required: 'Devam etmek için Kullanım Koşulları ve Gizlilik Politikası’nı kabul etmelisin',
     },
     errors: {
       invalid_credentials: 'E-posta veya parola hatalı',

@@ -17,9 +17,9 @@
 import {
   Room,
   RoomEvent,
-  ScreenSharePresets,
   Track,
   type LocalAudioTrack,
+  type LocalVideoTrack,
   type RemoteTrack,
   type RemoteParticipant,
 } from 'livekit-client';
@@ -112,6 +112,7 @@ class VoiceManager {
     this.applyLocalAudioEnabled();
     this.setupSpeakingDetection();
     void this.applyNoiseSuppression(store.noiseSuppression);
+    this.updateMediaSession(channelId);
 
     // Kalabalık bir kanala girince sunucunun gönderdiği "mevcut durum"
     // yakalama paketleri katılma OLAYI sayılıp art arda ses çalmasın.
@@ -141,6 +142,7 @@ class VoiceManager {
     this.stopScreenShareTracks();
     this.room?.disconnect();
     this.room = null;
+    if (!switchingChannel) this.clearMediaSession();
 
     if (this.speakingRaf !== null) cancelAnimationFrame(this.speakingRaf);
     this.speakingRaf = null;
@@ -331,6 +333,7 @@ class VoiceManager {
     this.applyLocalAudioEnabled();
     this.setupSpeakingDetection();
     void this.applyNoiseSuppression(useStore.getState().noiseSuppression);
+    this.updateMediaSession(channelId);
     suppressChimesForCatchUp();
     if (!useStore.getState().selfDeaf) playVoiceChime('join');
   }
@@ -477,17 +480,71 @@ class VoiceManager {
     return false;
   }
 
+  /**
+   * Media Session API — sesli kanaldayken sekme arka plana atılınca (Android
+   * Chrome özellikle) tarayıcının bunu "aktif medya oynatan" bir sekme
+   * olarak görüp daha az kısıtlamasını sağlıyor (kullanıcı raporu: arka
+   * planda karşı taraf sesi/kendi sesi bazen kesiliyordu). iOS Safari'de
+   * bu API'nin etkisi sınırlı — orada gerçek çözüm native uygulama, bkz.
+   * konuşma. Tarayıcı desteklemiyorsa (`'mediaSession' in navigator` false)
+   * sessizce no-op.
+   */
+  private updateMediaSession(channelId: string): void {
+    if (!('mediaSession' in navigator)) return;
+    let channelName = '';
+    let guildName = '';
+    for (const g of useStore.getState().guilds.values()) {
+      const ch = g.channels.find((c) => c.id === channelId);
+      if (ch) {
+        channelName = ch.name ?? '';
+        guildName = g.guild.name;
+        break;
+      }
+    }
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: channelName || 'Sesli kanal',
+      artist: guildName || 'Tuscord',
+      album: 'Tuscord',
+    });
+    navigator.mediaSession.playbackState = 'playing';
+  }
+
+  private clearMediaSession(): void {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = null;
+    navigator.mediaSession.playbackState = 'none';
+  }
+
   async startScreenShare(): Promise<void> {
     if (!this.room || this.screenStream) return;
     // Varsayılan (LiveKit'in kendi otomatik seçimi) tipik bir 1080p ekranda
-    // ~2.5 Mbps/15fps'e denk geliyor — premium sunucularda bunu 5 Mbps/30fps'e
-    // (h1080fps30) çıkarıyoruz. `original` (7 Mbps, ölçeklemesiz) değil:
-    // LiveKit sunucumuz halihazırda CPU sınırına yakın (bkz. yük testi
-    // bulguları), tek bir sunucuda deneysel bir bayrak için sunucu genelini
-    // riske atmaya değmez.
-    const publishOptions = this.hasPremiumVoiceQuality()
-      ? { videoEncoding: ScreenSharePresets.h1080fps30.encoding }
+    // ~2.5 Mbps/15fps'e denk geliyor. Premium sunucularda kullanıcı isteği
+    // NET: FPS değil, NETLİK (küçük yazı/rakamların okunabilirliği) önemli.
+    // Bu yüzden standart bir preset yerine kendi encoding'imiz — bit oranını
+    // artırıp hedef FPS'i düşürüyoruz (aynı bant genişliği bütçesi her
+    // karede daha az sıkıştırma = daha keskin görüntü). `original` (7 Mbps,
+    // ölçeklemesiz) değil: LiveKit sunucumuz CPU sınırına yakın (bkz. yük
+    // testi bulguları), sunucu genelini riske atmaya değmez.
+    const PREMIUM_SCREEN_SHARE_ENCODING = { maxBitrate: 10_000_000, maxFramerate: 15 };
+    const isPremium = this.hasPremiumVoiceQuality();
+    // ÖNEMLİ: LiveKit varsayılan olarak simulcast kullanıyor (bkz. options.d.ts
+    // "defaults to true") — yayınladığımız yüksek kaliteli katmanın yanında
+    // otomatik olarak 1-2 düşük kaliteli/küçük yedek katman daha üretir.
+    // `adaptiveStream` (bkz. Room ayarları), ızgarada küçük gösterilen ya da
+    // tam ekran açılmamış izleyicilere bu DÜŞÜK katmanı gönderir — kullanıcı
+    // raporu: "izleyenler bi fark yok diyor" tam olarak bununla açıklanıyor,
+    // yüksek bitrate ayarımız devreye hiç girmiyordu. Premium'da simulcast'i
+    // tamamen kapatıp HERKESE tek, yüksek kaliteli akışı zorunlu kılıyoruz.
+    const publishOptions = isPremium
+      ? { videoEncoding: PREMIUM_SCREEN_SHARE_ENCODING, simulcast: false }
       : undefined;
+    // LiveKit'in varsayılanı zaten 1080'e sınırlı (Chrome/Edge/Firefox) ama
+    // "Full HD net görünsün" isteği kesin olsun diye açıkça istiyoruz.
+    // İSTİSNA: Safari 17'de bilinen bir tarayıcı hatası var — çözünürlük
+    // açıkça belirtilirse DÜŞÜK çözünürlüğe düşüyor (bkz. livekit-client
+    // options.d.ts yorumu, webkit bug #263015). O yüzden Safari'de hiç
+    // belirtmiyoruz, varsayılanına (sınırsız ama genelde native) bırakıyoruz.
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
     let publication;
     try {
       publication = await this.room.localParticipant.setScreenShareEnabled(
@@ -495,6 +552,7 @@ class VoiceManager {
         {
           video: true,
           audio: true, // Chrome sekme/sistem sesini de paylaşabilir; varsa gönderilir.
+          ...(isPremium && !isSafari ? { resolution: { width: 1920, height: 1080 } } : {}),
         },
         publishOptions,
       );
@@ -502,6 +560,16 @@ class VoiceManager {
       return; // Kullanıcı iptal etti.
     }
     if (!publication?.track) return;
+
+    if (isPremium) {
+      // Tarayıcıya bu akışın hareketli video değil, DETAY (metin/rakam)
+      // ağırlıklı olduğunu söylüyoruz — kodlayıcı buna göre netliği
+      // pürüzsüzlüğe tercih eder. Bant genişliği daralırsa da çözünürlük
+      // DEĞİL kare hızı düşsün diye degradation tercihini sabitliyoruz
+      // (varsayılan davranış tam tersi olabiliyor).
+      publication.track.mediaStreamTrack.contentHint = 'detail';
+      void (publication.track as LocalVideoTrack).setDegradationPreference('maintain-resolution').catch(() => undefined);
+    }
 
     // force-move sırasında yeniden getDisplayMedia istemeden yeni odaya
     // tekrar publish edebilmek için akışı canlı tut (bkz. moveToChannel).

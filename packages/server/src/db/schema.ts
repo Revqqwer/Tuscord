@@ -670,6 +670,31 @@ export const pushTokens = pgTable(
 );
 
 /**
+ * Tarayıcı Web Push abonelikleri (VAPID) — web'de/PWA'da uygulama tamamen
+ * KAPALIYKEN de bildirim gösterebilmek için (bkz. services/webPush.ts).
+ * `endpoint` push servisinin (FCM/Mozilla/vb.) verdiği benzersiz URL;
+ * `p256dh`/`auth` tarayıcının ürettiği şifreleme anahtarları — ikisi de
+ * `PushSubscription.toJSON().keys`'ten geliyor, sunucu asla üretmiyor.
+ */
+export const webPushSubscriptions = pgTable(
+  'web_push_subscriptions',
+  {
+    id: snowflake('id').primaryKey(),
+    userId: snowflake('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull(),
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('web_push_subscriptions_endpoint_idx').on(t.endpoint),
+    index('web_push_subscriptions_user_idx').on(t.userId),
+  ],
+);
+
+/**
  * Gün başına en yüksek eşzamanlı aktif (gateway'e bağlı) kullanıcı sayısı —
  * admin panelindeki "Genel bakış" sekmesi için (bkz. services/activeUserPeaks.ts).
  * Tüm zamanların rekoru, bu tablodaki TÜM satırların MAX'ı olarak hesaplanır
@@ -697,6 +722,7 @@ export type Report = typeof reports.$inferSelect;
 export type Ticket = typeof tickets.$inferSelect;
 export type DesktopDownload = typeof desktopDownloads.$inferSelect;
 export type PushToken = typeof pushTokens.$inferSelect;
+export type WebPushSubscription = typeof webPushSubscriptions.$inferSelect;
 export type TicketMessage = typeof ticketMessages.$inferSelect;
 export type AuditLogRow = typeof auditLog.$inferSelect;
 export type ActiveUserPeak = typeof activeUserPeaks.$inferSelect;

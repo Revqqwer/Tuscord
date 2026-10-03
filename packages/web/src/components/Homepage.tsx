@@ -18,10 +18,14 @@
  * ekranına düşer).
  */
 
+import { useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, Globe } from 'lucide-react';
+import { Download, Globe, MonitorDown, Smartphone } from 'lucide-react';
 import { WalrusLoader } from './WalrusLoader';
 import { LegalFooter } from './LegalFooter';
+import { IosInstallModal } from './IosInstallModal';
+import { isInstallPromptAvailable, promptInstall, subscribeInstallPrompt } from '../lib/pwaInstall';
+import { isAndroid, isIOS } from '../lib/platform';
 
 interface Props {
   onEnter: () => void;
@@ -29,6 +33,37 @@ interface Props {
 
 export function Homepage({ onEnter }: Props) {
   const { t } = useTranslation();
+  // Windows .exe imzasız olduğu için SmartScreen uyarısı veriyor — tarayıcı
+  // "yüklenebilir" bulursa (bkz. lib/pwaInstall.ts) diye bir alternatif:
+  // manifest+service worker üzerinden PWA olarak yükleme, hiçbir uyarı yok.
+  // Chrome/Edge her sayfada bunu sunmayabilir (kriter/tarayıcıya bağlı), o
+  // yüzden buton yalnızca olay gerçekten ateşlendiğinde görünür.
+  const canInstallPwa = useSyncExternalStore(subscribeInstallPrompt, isInstallPromptAvailable);
+  // Mobilde .exe anlamsız — telefon/tablette platforma uygun tek bir
+  // "Uygulamayı indir" butonu gösteriyoruz (bkz. aşağıdaki handleMobileInstall).
+  const [mobilePlatform] = useState<'ios' | 'android' | null>(() =>
+    isIOS() ? 'ios' : isAndroid() ? 'android' : null,
+  );
+  const [showIosInstructions, setShowIosInstructions] = useState(false);
+  // Masaüstünde "Alternatif indirme" butonu ARTIK HER ZAMAN görünür (önceden
+  // yalnızca `beforeinstallprompt` ateşlendiğinde çıkıyordu — kullanıcı
+  // raporu: "kurulu olsa da buton kaybolmasın", sebepsiz kaybolan bir buton
+  // kafa karıştırıyor). Olay yoksa (zaten yüklü ya da Chrome'un kendi
+  // soğuma politikası) tıklayınca kontrol etmesi gereken yerleri gösteren
+  // bir yardım penceresi açılır.
+  const [showDesktopInstallHelp, setShowDesktopInstallHelp] = useState(false);
+
+  function handleMobileInstall(): void {
+    if (mobilePlatform === 'ios') {
+      setShowIosInstructions(true);
+      return;
+    }
+    // Android: kriterler karşılanmışsa native istemi tetikle; henüz
+    // ateşlenmemişse (bkz. beforeinstallprompt gecikmesi) aynı talimat
+    // modalını göster — tarayıcı menüsünden de aynı sonuca ulaşılabilir.
+    if (canInstallPwa) void promptInstall();
+    else setShowIosInstructions(true);
+  }
 
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden bg-[var(--color-surface-0)]">
@@ -71,28 +106,60 @@ export function Homepage({ onEnter }: Props) {
               {t('homepage.subtitle')}
             </p>
 
-            <div className="mt-5 flex shrink-0 flex-col items-center gap-2.5 sm:flex-row sm:gap-3 lg:mt-8">
-              {/* Masaüstü uygulaması yayında — Electron kabuğu, web arayüzünü
-                  aynen yükler (bkz. packages/desktop). */}
-              <a
-                href="/api/v1/downloads/desktop"
-                title={t('homepage.downloadLive')}
-                className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
-              >
-                <Download size={18} />
-                {t('homepage.downloadWindows')}
-                <span className="rounded-full bg-[var(--color-brand)]/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-brand)]">
-                  {t('homepage.downloadLive')}
-                </span>
-              </a>
-              <button
-                type="button"
-                onClick={onEnter}
-                className="flex items-center gap-2 rounded-full bg-[var(--color-brand)] px-6 py-3 text-sm font-semibold text-black transition hover:bg-[var(--color-brand-strong)]"
-              >
-                <Globe size={18} />
-                {t('homepage.openInBrowser')}
-              </button>
+            {/* Üst satır: iki buton (indirme + tarayıcı). Alt satır: web app
+                (PWA) yükleme — kullanıcı isteği: "üstte 2 buton altta 1
+                buton olsun". */}
+            <div className="mt-5 flex shrink-0 flex-col items-center gap-2.5 lg:mt-8">
+              <div className="flex flex-col items-center gap-2.5 sm:flex-row sm:gap-3">
+                {mobilePlatform ? (
+                  // Mobilde .exe anlamsız — PWA yükleme (bkz. lib/pwaInstall.ts,
+                  // lib/platform.ts) tek "Uygulamayı indir" butonu olarak sunulur.
+                  <button
+                    type="button"
+                    onClick={handleMobileInstall}
+                    className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
+                  >
+                    <Smartphone size={18} />
+                    {t('homepage.installApp')}
+                  </button>
+                ) : (
+                  // Masaüstü uygulaması yayında — Electron kabuğu, web arayüzünü
+                  // aynen yükler (bkz. packages/desktop).
+                  <a
+                    href="/api/v1/downloads/desktop"
+                    title={t('homepage.downloadLive')}
+                    className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
+                  >
+                    <Download size={18} />
+                    {t('homepage.downloadWindows')}
+                    <span className="rounded-full bg-[var(--color-brand)]/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-brand)]">
+                      {t('homepage.downloadLive')}
+                    </span>
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={onEnter}
+                  className="flex items-center gap-2 rounded-full bg-[var(--color-brand)] px-6 py-3 text-sm font-semibold text-black transition hover:bg-[var(--color-brand-strong)]"
+                >
+                  <Globe size={18} />
+                  {t('homepage.openInBrowser')}
+                </button>
+              </div>
+              {!mobilePlatform && (
+                <button
+                  type="button"
+                  onClick={() => (canInstallPwa ? void promptInstall() : setShowDesktopInstallHelp(true))}
+                  title={t('homepage.installAlternative')}
+                  className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
+                >
+                  <MonitorDown size={18} />
+                  {t('homepage.installAlternative')}
+                  <span className="rounded-full bg-[var(--color-ink-faint)]/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-ink-muted)]">
+                    {t('homepage.nonExe')}
+                  </span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -145,6 +212,13 @@ export function Homepage({ onEnter }: Props) {
       <div className="relative z-10 shrink-0 px-4 pb-2 sm:pb-3">
         <LegalFooter />
       </div>
+
+      {showIosInstructions && mobilePlatform && (
+        <IosInstallModal platform={mobilePlatform} onClose={() => setShowIosInstructions(false)} />
+      )}
+      {showDesktopInstallHelp && (
+        <IosInstallModal platform="desktop" onClose={() => setShowDesktopInstallHelp(false)} />
+      )}
     </div>
   );
 }

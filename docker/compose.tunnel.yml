@@ -43,6 +43,9 @@ services:
       WEB_ORIGIN: https://tuscord.com
     volumes:
       - uploads:/app/packages/server/var/uploads
+      # APNs .p8 anahtarı — .env'e düz metin olarak GİRİLMEZ, dosya olarak
+      # salt-okunur bağlanır (bkz. env.ts APNS_KEY_P8_PATH).
+      - ../secrets:/app/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
