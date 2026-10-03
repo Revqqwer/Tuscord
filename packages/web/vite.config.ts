@@ -14,6 +14,10 @@ export default defineConfig({
       // (SameSite=lax, HttpOnly) çapraz origin'de sorun çıkarır.
       '/api': { target: 'http://localhost:3001', changeOrigin: true },
       '/legal': { target: 'http://localhost:3001', changeOrigin: true },
+      '/gizlilik': { target: 'http://localhost:3001', changeOrigin: true },
+      '/kosullar': { target: 'http://localhost:3001', changeOrigin: true },
+      '/hesap-silme': { target: 'http://localhost:3001', changeOrigin: true },
+      '/cocuk-guvenligi': { target: 'http://localhost:3001', changeOrigin: true },
       '/gateway': { target: 'ws://localhost:3001', ws: true },
     },
   },

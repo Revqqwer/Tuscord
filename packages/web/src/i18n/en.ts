@@ -10,9 +10,19 @@ export const en = {
     headline: 'The comfiest way to chat with your friends',
     subtitle:
       'Tuscord brings text, voice chat, and screen sharing together in one place. Start a server, share the invite link, and start talking.',
-    downloadWindows: 'Download for Windows',
+    downloadWindows: 'Download as Exe',
     openInBrowser: 'Open Tuscord in your browser',
     downloadLive: 'Now live',
+    installAlternative: 'Download as Web App',
+    nonExe: 'Non Exe',
+    installApp: 'Download app',
+    iosInstallTitle: 'Install Tuscord',
+    iosInstallStep1: 'Tap the Share (□↑) icon below.',
+    androidInstallStep1: 'Tap the ⋮ menu in the top right.',
+    iosInstallStep2: "Select 'Add to Home Screen' from the list.",
+    desktopInstallHint: 'Click the install icon (⊕) on the right side of the address bar.',
+    desktopInstallAlreadyHint:
+      "Don't see the icon? Tuscord is probably already installed — check chrome://apps.",
   },
   auth: {
     loginTitle: 'Welcome back',
@@ -30,6 +40,9 @@ export const en = {
     rememberMe: 'Stay signed in',
     showPassword: 'Show password',
     hidePassword: 'Hide password',
+    acceptTermsPrefix: 'I have read and agree to the',
+    acceptTermsAnd: 'and',
+    acceptTermsSuffix: '.',
     sessionInvalidated: 'You were logged out because you signed in elsewhere (browser or desktop app).',
     accountDeleted: 'Your account was deleted by an admin.',
     accountBanned: 'Your account was banned by an admin.',
@@ -65,6 +78,7 @@ export const en = {
       username_required: 'Enter a username',
       username_invalid: 'Username must be {{min}}-{{max}} characters; only lowercase letters, numbers, _ and . are allowed',
       username_taken: 'That username is taken, try another',
+      terms_required: 'You must accept the Terms of Use and Privacy Policy to continue',
     },
     errors: {
       invalid_credentials: 'Wrong email or password',

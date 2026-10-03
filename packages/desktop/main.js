@@ -8,7 +8,7 @@
  */
 
 const path = require('node:path');
-const { app, BrowserWindow, Menu, Tray, shell, desktopCapturer, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, Tray, shell, desktopCapturer, ipcMain, clipboard } = require('electron');
 
 const APP_URL = 'https://tuscord.com';
 const ICON_PATH = path.join(__dirname, 'build', 'icon.ico');
@@ -52,6 +52,7 @@ function createWindow() {
       sandbox: true,
       // Mikrofon/ekran paylaşımı (WebRTC) için medya izinleri gerekiyor —
       // bkz. aşağıdaki setPermissionRequestHandler.
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -155,6 +156,13 @@ function createTray() {
  * aynı anda yalnızca bir ekran paylaşımı isteği olabileceği için tek bir
  * modül seviyesi değişken yeterli. */
 let activePickerResolve = null;
+
+// Bkz. preload.js yorumu: web'in navigator.clipboard'ı pencere odakta
+// değilken sessizce başarısız olabiliyor, Electron'un kendi clipboard
+// modülü buna tabi değil.
+ipcMain.handle('clipboard:write', (_event, text) => {
+  clipboard.writeText(String(text));
+});
 
 ipcMain.on('picker:select', (_event, sourceId) => {
   if (activePickerResolve) activePickerResolve(sourceId);

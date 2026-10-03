@@ -13,7 +13,7 @@ import { desktopDownloads } from '../db/schema.js';
 import { nextId } from '../lib/id.js';
 import { requestIp } from '../app.js';
 
-const DESKTOP_INSTALLER_PATH = '/downloads/Tuscord-Setup-0.1.5.exe';
+const DESKTOP_INSTALLER_PATH = '/downloads/Tuscord-Setup-0.1.6.exe';
 
 export async function downloadRoutes(app: FastifyInstance): Promise<void> {
   app.get('/downloads/desktop', async (request, reply) => {

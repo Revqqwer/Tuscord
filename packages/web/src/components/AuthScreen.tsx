@@ -14,7 +14,7 @@ interface Props {
   onSuspended?: (email: string, until: string) => void;
 }
 
-type FieldName = 'username' | 'email' | 'password';
+type FieldName = 'username' | 'email' | 'password' | 'terms';
 type FieldErrors = Partial<Record<FieldName, string>>;
 
 /**
@@ -35,6 +35,7 @@ const FIELD_MESSAGE_KEY: Record<FieldName, string> = {
   username: 'auth.fieldErrors.username_invalid',
   email: 'auth.fieldErrors.email_invalid',
   password: 'auth.fieldErrors.password_short',
+  terms: 'auth.fieldErrors.terms_required',
 };
 
 export function AuthScreen({ onAuthenticated, onSuspended }: Props) {
@@ -48,6 +49,7 @@ export function AuthScreen({ onAuthenticated, onSuspended }: Props) {
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   // Masaüstü uygulamasında varsayılan işaretli — açılışta şifre sormadan
   // girmek zaten beklenen davranış (bkz. kullanıcı isteği: "logout olana
   // kadar tekrar şifre sormasın").
@@ -82,6 +84,10 @@ export function AuthScreen({ onAuthenticated, onSuspended }: Props) {
       errors.password = t('auth.fieldErrors.password_short', { min: Limits.PASSWORD_MIN });
     } else if (mode === 'register' && !isStrongPassword(password)) {
       errors.password = t('auth.fieldErrors.password_weak');
+    }
+
+    if (mode === 'register' && !acceptedTerms) {
+      errors.terms = t('auth.fieldErrors.terms_required');
     }
 
     return errors;
@@ -267,6 +273,39 @@ export function AuthScreen({ onAuthenticated, onSuspended }: Props) {
                 >
                   {t('auth.forgotPassword')}
                 </button>
+              </div>
+            )}
+
+            {mode === 'register' && (
+              <div className="mb-4">
+                <label className="flex items-start gap-2 text-sm text-[var(--color-ink-muted)]">
+                  <input
+                    type="checkbox"
+                    checked={acceptedTerms}
+                    onChange={(event) => {
+                      setAcceptedTerms(event.target.checked);
+                      if (fieldErrors.terms) setFieldErrors({ ...fieldErrors, terms: undefined });
+                    }}
+                    aria-invalid={fieldErrors.terms !== undefined}
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-[var(--color-line)] accent-[var(--color-brand)]"
+                  />
+                  <span>
+                    {t('auth.acceptTermsPrefix') ? `${t('auth.acceptTermsPrefix')} ` : ''}
+                    <a href="/kosullar" target="_blank" rel="noreferrer" className="text-[var(--color-brand)] hover:underline">
+                      {t('legal.terms')}
+                    </a>{' '}
+                    {t('auth.acceptTermsAnd')}{' '}
+                    <a href="/gizlilik" target="_blank" rel="noreferrer" className="text-[var(--color-brand)] hover:underline">
+                      {t('legal.privacy')}
+                    </a>
+                    {t('auth.acceptTermsSuffix')}
+                  </span>
+                </label>
+                {fieldErrors.terms && (
+                  <span role="alert" className="mt-1 block text-xs text-[var(--color-danger)]">
+                    {fieldErrors.terms}
+                  </span>
+                )}
               </div>
             )}
 

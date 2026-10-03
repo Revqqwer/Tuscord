@@ -52,7 +52,13 @@ body {
   font-family: var(--font-sans);
   /* iOS'ta lastik bandı kaydırmasının panelleri kaydırmasını önler. */
   overscroll-behavior: none;
-  /* Çentik ve alt gezinme çubuğu altında içerik kalmasın. */
+  /*
+   * Çentik/durum çubuğu ve alt gezinme çubuğu altında içerik kalmasın.
+   * `padding-top` özellikle standalone PWA modunda (tarayıcı çubuğu yok,
+   * bkz. kullanıcı ekran görüntüsü — üst başlık saat/pil simgeleriyle
+   * çakışıyordu) şart; ÖNCEDEN eksikti, yalnızca sağ/sol/alt vardı.
+   */
+  padding-top: env(safe-area-inset-top);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);

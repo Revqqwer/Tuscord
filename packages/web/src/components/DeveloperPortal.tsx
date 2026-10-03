@@ -20,6 +20,7 @@ import {
   type APIBotApplicationWithToken,
 } from '@tuscord/shared';
 import { ApiError, api } from '../lib/api';
+import { copyText } from '../lib/clipboard';
 import { Avatar } from './Avatar';
 import { initialsFromName } from '../lib/initials';
 
@@ -267,7 +268,7 @@ function TokenReveal({ token, onDismiss }: { token: string; onDismiss: () => voi
   const [copied, setCopied] = useState(false);
 
   function copy() {
-    void navigator.clipboard.writeText(token).then(() => {
+    void copyText(token).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -311,7 +312,7 @@ function InviteLinkBuilder({ app, onBack }: { app: APIBotApplication; onBack: ()
   }
 
   function copy() {
-    void navigator.clipboard.writeText(link).then(() => {
+    void copyText(link).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });

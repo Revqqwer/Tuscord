@@ -14,7 +14,8 @@ import { ResetPasswordScreen } from './components/ResetPasswordScreen';
 import { SupportScreen } from './components/SupportScreen';
 import { VerifyEmailScreen } from './components/VerifyEmailScreen';
 import { WalrusLoader } from './components/WalrusLoader';
-import { isDesktopApp } from './lib/platform';
+import { isCapacitorApp, isDesktopApp } from './lib/platform';
+import { registerNativePush } from './lib/nativePush';
 
 /**
  * Davet bağlantısı dışında tek ekranlı bir uygulama olduğu için router
@@ -124,12 +125,15 @@ export function App() {
   const [botInvite, setBotInvite] = useState(() => botInviteFromUrl());
   const [showAdminStats, setShowAdminStats] = useState(() => wantsAdminStats());
   /**
-   * Masaüstü uygulamasında açılış sayfası hiç gösterilmez — orada zaten
-   * içindesin, "Windows için indir" sunmak anlamsız (bkz. kullanıcı raporu).
-   * Discord'un kendi masaüstü istemcisi de aynı şekilde davranıyor: pencere
-   * açılır açılmaz doğrudan giriş ekranı.
+   * Masaüstü ve iOS uygulamalarında açılış sayfası hiç gösterilmez — orada
+   * zaten içindesin, "indir" / "tarayıcıda aç" önermek anlamsız (bkz.
+   * kullanıcı raporu: App Store'dan indirilen uygulamada bile açılış
+   * sayfası çıkıyordu). Discord'un kendi masaüstü istemcisi de aynı şekilde
+   * davranıyor: pencere açılır açılmaz doğrudan giriş ekranı.
    */
-  const [showAuth, setShowAuth] = useState(() => wantsAuthScreen() || isDesktopApp());
+  const [showAuth, setShowAuth] = useState(
+    () => wantsAuthScreen() || isDesktopApp() || isCapacitorApp(),
+  );
 
   // Açılışta cookie geçerli mi: geçerliyse giriş ekranını hiç gösterme.
   useEffect(() => {
@@ -149,13 +153,19 @@ export function App() {
       setShowSupport(wantsSupportScreen());
       setBotInvite(botInviteFromUrl());
       setShowAdminStats(wantsAdminStats());
-      setShowAuth(wantsAuthScreen() || isDesktopApp());
+      setShowAuth(wantsAuthScreen() || isDesktopApp() || isCapacitorApp());
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   useGateway(user !== null);
+
+  // iOS kabuğunda giriş yapılınca APNs'e kaydol (bkz. lib/nativePush.ts) —
+  // sıradan tarayıcıda isCapacitorApp() false döner, no-op.
+  useEffect(() => {
+    if (user !== null) void registerNativePush();
+  }, [user]);
 
   function leaveInvite() {
     history.pushState({}, '', '/');

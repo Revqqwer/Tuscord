@@ -14,6 +14,7 @@ import { adminRoutes } from './admin.js';
 import { botRoutes } from './bots.js';
 import { ticketRoutes } from './tickets.js';
 import { downloadRoutes } from './downloads.js';
+import { legalPageRoutes } from './legalPages.js';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get('/health', async () => ({ ok: true }));
@@ -28,6 +29,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     hostingCountry: 'TR',
     trafficLogRetentionDays: env.TRAFFIC_LOG_RETENTION_DAYS,
   }));
+
+  /**
+   * Gizlilik/Kullanım Koşulları — App Store ve KVKK için gerçek, girişsiz
+   * erişilebilir HTML sayfalar (SPA rotası değil, /legal/contact gibi
+   * doğrudan üstte).
+   */
+  await app.register(legalPageRoutes);
 
   await app.register(
     async (api) => {
