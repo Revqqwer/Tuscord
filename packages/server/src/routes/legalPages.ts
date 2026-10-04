@@ -40,7 +40,7 @@ export async function legalPageRoutes(app: FastifyInstance): Promise<void> {
       `
 <p>Bu politika, <strong>Tuscord</strong> (tuscord.com, masaüstü ve mobil uygulamaları)
 kullanırken hangi verilerinizin toplandığını ve nasıl kullanıldığını açıklar.
-Veri sorumlusu: <strong>Tuscord</strong> — iletişim: <a href="mailto:${env.ABUSE_CONTACT_EMAIL}">${env.ABUSE_CONTACT_EMAIL}</a></p>
+Veri sorumlusu: <strong>Hasan Kılıçarslan</strong> — iletişim: <a href="mailto:${env.ABUSE_CONTACT_EMAIL}">${env.ABUSE_CONTACT_EMAIL}</a></p>
 
 <h2>Topladığımız veriler</h2>
 <ul>
