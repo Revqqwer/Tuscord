@@ -5,6 +5,7 @@ build/
 !packages/desktop/build/
 packages/desktop/build/*
 !packages/desktop/build/generate-icon.mjs
+!packages/desktop/build/generate-appx-assets.mjs
 .env
 .env.*
 !.env.example
