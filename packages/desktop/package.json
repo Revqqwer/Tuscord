@@ -6,7 +6,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win nsis"
+    "dist:win": "electron-builder --win nsis",
+    "dist:store": "electron-builder --win appx -c.extraMetadata.version=1.0.0"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -42,6 +43,17 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Tuscord"
+    },
+    "appx": {
+      "identityName": "3NFNANS.Tuscord",
+      "publisher": "CN=C6B18975-C8E2-4F88-A7AF-208A5A8B4D60",
+      "publisherDisplayName": "3NFİNANS",
+      "applicationId": "Tuscord",
+      "displayName": "Tuscord",
+      "backgroundColor": "#0f1115",
+      "languages": [
+        "tr-TR"
+      ]
     }
   }
 }
