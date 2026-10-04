@@ -10,7 +10,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { eq, lt } from 'drizzle-orm';
+import { desc, eq, lt } from 'drizzle-orm';
 import { GatewayEvent } from '@tuscord/shared';
 import { db } from '../db/index.js';
 import { sessions, users } from '../db/schema.js';
@@ -74,19 +74,24 @@ export interface CreateSessionInput {
 }
 
 /**
- * Aynı anda yalnızca bir oturum: yeni giriş, tarayıcı/masaüstü fark
- * etmeksizin önceki TÜM oturumları düşürür (bkz. kullanıcı isteği). Yalnızca
- * veritabanı satırını silmek yetmez — eski istemci hâlâ gateway'e bağlıysa
- * bir sonraki REST isteğine kadar çalışmaya devam ederdi; bu yüzden
- * SESSION_INVALIDATED ile anında koparılır (bkz. useGateway.ts).
- *
- * Kayıt akışında da çağrılır ama orada zaten önceki oturum yoktur —
- * `destroyAllSessions`/yayın no-op olur, zararsız.
+ * Bir kullanıcının aynı anda saklanan en fazla oturum sayısı (telefon,
+ * tarayıcı, masaüstü vb.). Aşılırsa EN ESKİ oturumlar düşer — tablo sınırsız
+ * büyümesin ve unutulmuş cihazlar sonsuza dek açık kalmasın diye.
+ */
+const MAX_SESSIONS_PER_USER = 10;
+
+/**
+ * Çoklu cihaz: yeni giriş diğer oturumları DÜŞÜRMEZ — telefon, tarayıcı ve
+ * masaüstü aynı anda açık kalabilir (kullanıcı isteği; eskiden "tek oturum"
+ * idi). Tüm cihazlardan çıkış hâlâ `destroyAllSessions` ile olur (parola
+ * sıfırlama, yasaklama/silme — bkz. routes/auth.ts, forceLogoutUser).
+ * Gateway zaten oturum başına ayrı bağlantı tutar; kullanıcı yalnızca son
+ * bağlantısı kapanınca çevrimdışı görünür (bkz. gateway/index.ts unregister).
  */
 export async function createSession(
   input: CreateSessionInput,
 ): Promise<{ token: string; sessionId: bigint; expiresAt: Date }> {
-  await destroyAllSessions(input.userId);
+  await pruneOldestSessions(input.userId, MAX_SESSIONS_PER_USER - 1);
 
   const token = generateToken();
   const tokenHash = hashToken(token);
@@ -110,12 +115,24 @@ export async function createSession(
   };
   await redis.set(RedisKeys.session(tokenHash), JSON.stringify(cached), 'EX', ttlDays * 86_400);
 
-  await publishToUsers([input.userId.toString()], {
-    event: GatewayEvent.SESSION_INVALIDATED,
-    payload: {},
-  });
-
   return { token, sessionId, expiresAt };
+}
+
+/** Kullanıcının en yeni `keep` oturumunu bırakır, daha eskilerini siler. */
+async function pruneOldestSessions(userId: bigint, keep: number): Promise<void> {
+  const rows = await db
+    .select({ id: sessions.id, tokenHash: sessions.tokenHash })
+    .from(sessions)
+    .where(eq(sessions.userId, userId))
+    .orderBy(desc(sessions.createdAt));
+
+  const stale = rows.slice(keep);
+  if (stale.length === 0) return;
+
+  await redis.del(...stale.map((r) => RedisKeys.session(r.tokenHash)));
+  for (const row of stale) {
+    await db.delete(sessions).where(eq(sessions.id, row.id));
+  }
 }
 
 /**
