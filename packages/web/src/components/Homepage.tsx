@@ -18,14 +18,16 @@
  * ekranına düşer).
  */
 
-import { useState, useSyncExternalStore } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, Globe, Smartphone } from 'lucide-react';
 import { WalrusLoader } from './WalrusLoader';
 import { LegalFooter } from './LegalFooter';
-import { IosInstallModal } from './IosInstallModal';
-import { isInstallPromptAvailable, promptInstall, subscribeInstallPrompt } from '../lib/pwaInstall';
 import { isAndroid, isIOS } from '../lib/platform';
+
+const IOS_STORE_URL = 'https://apps.apple.com/tr/app/id6816654754';
+/** Play'de üretime çıkınca doldur (https://play.google.com/store/apps/details?id=com.tuscord.app). */
+const ANDROID_STORE_URL: string | null = null;
 
 interface Props {
   onEnter: () => void;
@@ -33,30 +35,13 @@ interface Props {
 
 export function Homepage({ onEnter }: Props) {
   const { t } = useTranslation();
-  // Windows .exe imzasız olduğu için SmartScreen uyarısı veriyor — tarayıcı
-  // "yüklenebilir" bulursa (bkz. lib/pwaInstall.ts) diye bir alternatif:
-  // manifest+service worker üzerinden PWA olarak yükleme, hiçbir uyarı yok.
-  // Chrome/Edge her sayfada bunu sunmayabilir (kriter/tarayıcıya bağlı), o
-  // yüzden buton yalnızca olay gerçekten ateşlendiğinde görünür.
-  const canInstallPwa = useSyncExternalStore(subscribeInstallPrompt, isInstallPromptAvailable);
-  // Mobilde .exe anlamsız — telefon/tablette platforma uygun tek bir
-  // "Uygulamayı indir" butonu gösteriyoruz (bkz. aşağıdaki handleMobileInstall).
+  // Mobilde .exe anlamsız — iOS'ta App Store'a yönlendiriyoruz. Android'de
+  // Play uygulaması herkese açık (üretim) olana kadar buton gizli; yayına
+  // çıkınca ANDROID_STORE_URL'i doldurmak yeterli.
   const [mobilePlatform] = useState<'ios' | 'android' | null>(() =>
     isIOS() ? 'ios' : isAndroid() ? 'android' : null,
   );
-  const [showIosInstructions, setShowIosInstructions] = useState(false);
-
-  function handleMobileInstall(): void {
-    if (mobilePlatform === 'ios') {
-      setShowIosInstructions(true);
-      return;
-    }
-    // Android: kriterler karşılanmışsa native istemi tetikle; henüz
-    // ateşlenmemişse (bkz. beforeinstallprompt gecikmesi) aynı talimat
-    // modalını göster — tarayıcı menüsünden de aynı sonuca ulaşılabilir.
-    if (canInstallPwa) void promptInstall();
-    else setShowIosInstructions(true);
-  }
+  const storeUrl = mobilePlatform === 'ios' ? IOS_STORE_URL : mobilePlatform === 'android' ? ANDROID_STORE_URL : null;
 
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden bg-[var(--color-surface-0)]">
@@ -104,16 +89,16 @@ export function Homepage({ onEnter }: Props) {
             <div className="mt-5 flex shrink-0 flex-col items-center gap-2.5 lg:mt-8">
               <div className="flex flex-col items-center gap-2.5 sm:flex-row sm:gap-3">
                 {mobilePlatform ? (
-                  // Mobilde .exe anlamsız — PWA yükleme (bkz. lib/pwaInstall.ts,
-                  // lib/platform.ts) tek "Uygulamayı indir" butonu olarak sunulur.
-                  <button
-                    type="button"
-                    onClick={handleMobileInstall}
-                    className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
-                  >
-                    <Smartphone size={18} />
-                    {t('homepage.installApp')}
-                  </button>
+                  // Mobilde .exe anlamsız — mağaza bağlantısı (yoksa buton hiç görünmez).
+                  storeUrl && (
+                    <a
+                      href={storeUrl}
+                      className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
+                    >
+                      <Smartphone size={18} />
+                      {t('homepage.installApp')}
+                    </a>
+                  )
                 ) : (
                   // Masaüstü uygulaması yayında — Electron kabuğu, web arayüzünü
                   // aynen yükler (bkz. packages/desktop).
@@ -191,9 +176,6 @@ export function Homepage({ onEnter }: Props) {
         <LegalFooter />
       </div>
 
-      {showIosInstructions && mobilePlatform && (
-        <IosInstallModal platform={mobilePlatform} onClose={() => setShowIosInstructions(false)} />
-      )}
     </div>
   );
 }
