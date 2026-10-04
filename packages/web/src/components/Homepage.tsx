@@ -20,7 +20,7 @@
 
 import { useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, Globe, MonitorDown, Smartphone } from 'lucide-react';
+import { Download, Globe, Smartphone } from 'lucide-react';
 import { WalrusLoader } from './WalrusLoader';
 import { LegalFooter } from './LegalFooter';
 import { IosInstallModal } from './IosInstallModal';
@@ -45,13 +45,6 @@ export function Homepage({ onEnter }: Props) {
     isIOS() ? 'ios' : isAndroid() ? 'android' : null,
   );
   const [showIosInstructions, setShowIosInstructions] = useState(false);
-  // Masaüstünde "Alternatif indirme" butonu ARTIK HER ZAMAN görünür (önceden
-  // yalnızca `beforeinstallprompt` ateşlendiğinde çıkıyordu — kullanıcı
-  // raporu: "kurulu olsa da buton kaybolmasın", sebepsiz kaybolan bir buton
-  // kafa karıştırıyor). Olay yoksa (zaten yüklü ya da Chrome'un kendi
-  // soğuma politikası) tıklayınca kontrol etmesi gereken yerleri gösteren
-  // bir yardım penceresi açılır.
-  const [showDesktopInstallHelp, setShowDesktopInstallHelp] = useState(false);
 
   function handleMobileInstall(): void {
     if (mobilePlatform === 'ios') {
@@ -106,9 +99,8 @@ export function Homepage({ onEnter }: Props) {
               {t('homepage.subtitle')}
             </p>
 
-            {/* Üst satır: iki buton (indirme + tarayıcı). Alt satır: web app
-                (PWA) yükleme — kullanıcı isteği: "üstte 2 buton altta 1
-                buton olsun". */}
+            {/* İki buton: indirme + tarayıcı. Masaüstünde "web app (PWA) olarak
+                yükle" butonu kullanıcı isteğiyle kaldırıldı. */}
             <div className="mt-5 flex shrink-0 flex-col items-center gap-2.5 lg:mt-8">
               <div className="flex flex-col items-center gap-2.5 sm:flex-row sm:gap-3">
                 {mobilePlatform ? (
@@ -146,20 +138,6 @@ export function Homepage({ onEnter }: Props) {
                   {t('homepage.openInBrowser')}
                 </button>
               </div>
-              {!mobilePlatform && (
-                <button
-                  type="button"
-                  onClick={() => (canInstallPwa ? void promptInstall() : setShowDesktopInstallHelp(true))}
-                  title={t('homepage.installAlternative')}
-                  className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
-                >
-                  <MonitorDown size={18} />
-                  {t('homepage.installAlternative')}
-                  <span className="rounded-full bg-[var(--color-ink-faint)]/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-ink-muted)]">
-                    {t('homepage.nonExe')}
-                  </span>
-                </button>
-              )}
             </div>
           </div>
 
@@ -215,9 +193,6 @@ export function Homepage({ onEnter }: Props) {
 
       {showIosInstructions && mobilePlatform && (
         <IosInstallModal platform={mobilePlatform} onClose={() => setShowIosInstructions(false)} />
-      )}
-      {showDesktopInstallHelp && (
-        <IosInstallModal platform="desktop" onClose={() => setShowDesktopInstallHelp(false)} />
       )}
     </div>
   );
