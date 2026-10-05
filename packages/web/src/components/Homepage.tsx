@@ -25,6 +25,8 @@ import { WalrusLoader } from './WalrusLoader';
 import { LegalFooter } from './LegalFooter';
 import { isAndroid, isIOS } from '../lib/platform';
 
+/** Windows masaüstü uygulaması Microsoft Store'da (imzayı Store atar → SmartScreen uyarısı yok). */
+const WINDOWS_STORE_URL = 'https://apps.microsoft.com/detail/9P6BRXPD89QD';
 const IOS_STORE_URL = 'https://apps.apple.com/tr/app/id6816654754';
 /** Play'de üretime çıkınca doldur (https://play.google.com/store/apps/details?id=com.tuscord.app). */
 const ANDROID_STORE_URL: string | null = null;
@@ -103,7 +105,9 @@ export function Homepage({ onEnter }: Props) {
                   // Masaüstü uygulaması yayında — Electron kabuğu, web arayüzünü
                   // aynen yükler (bkz. packages/desktop).
                   <a
-                    href="/api/v1/downloads/desktop"
+                    href={WINDOWS_STORE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     title={t('homepage.downloadLive')}
                     className="flex items-center gap-2 rounded-full bg-[var(--color-surface-2)] px-6 py-3 text-sm font-semibold text-[var(--color-ink)] transition hover:bg-[var(--color-surface-3)]"
                   >
