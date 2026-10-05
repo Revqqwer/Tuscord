@@ -10,7 +10,7 @@ export const en = {
     headline: 'The comfiest way to chat with your friends',
     subtitle:
       'Tuscord brings text, voice chat, and screen sharing together in one place. Start a server, share the invite link, and start talking.',
-    downloadWindows: 'Get it from Microsoft Store',
+    downloadWindows: 'Download as App',
     openInBrowser: 'Open Tuscord in your browser',
     downloadLive: 'Now live',
     installAlternative: 'Download as Web App',

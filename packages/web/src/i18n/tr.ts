@@ -10,7 +10,7 @@ export const tr = {
     headline: 'Arkadaşlarınla sohbet etmenin en rahat yolu',
     subtitle:
       'Tuscord; metin, sesli sohbet ve ekran paylaşımını tek yerde toplar. Bir sunucu kur, davet linkini paylaş, konuşmaya başla.',
-    downloadWindows: "Microsoft Store'dan indir",
+    downloadWindows: 'Uygulama olarak indir',
     openInBrowser: "Tuscord'u tarayıcıda aç",
     downloadLive: 'Şimdi yayında',
     installAlternative: 'Web App olarak indir',
