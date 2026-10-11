@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { Download, Globe, Smartphone } from 'lucide-react';
 import { WalrusLoader } from './WalrusLoader';
 import { LegalFooter } from './LegalFooter';
+import { IntroVideo } from './IntroVideo';
 import { isAndroid, isIOS } from '../lib/platform';
 
 /** Windows masaüstü uygulaması Microsoft Store'da (imzayı Store atar → SmartScreen uyarısı yok). */
@@ -130,49 +131,9 @@ export function Homepage({ onEnter }: Props) {
             </div>
           </div>
 
-          {/* Sağ sütun (lg+): uygulama önizlemesi — gerçek illüstrasyon yerine,
-              mevcut arayüzün renk paletiyle sadeleştirilmiş bir maket (bkz.
-              sohbet için hazır bir görsel varlığımız yok, önceki konuşma:
-              illüstratörle koleksiyon). Dar ekranda gizli: hem yer yok hem
-              tek-ekran kısıtına uymuyor. */}
-          <div className="hidden w-full max-w-xl overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-1)] shadow-2xl md:block lg:max-w-none lg:flex-1">
-            <div className="flex h-7 items-center gap-1.5 border-b border-[var(--color-line)] bg-[var(--color-surface-2)] px-3.5">
-              <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-danger)]/60" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-idle)]/60" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-online)]/60" />
-            </div>
-            <div className="flex h-44 md:h-56 lg:h-72 xl:h-80">
-              <div className="hidden w-44 shrink-0 border-r border-[var(--color-line)] bg-[var(--color-surface-1)] p-3.5 text-left lg:block">
-                <div className="mb-3 h-3 w-24 rounded bg-[var(--color-ink-faint)]/30" />
-                {['genel', 'oyun-önerileri', 'ses-lobi'].map((name, i) => (
-                  <div
-                    key={name}
-                    className={`mb-1.5 flex items-center gap-1.5 rounded px-2 py-1.5 text-sm ${
-                      i === 0
-                        ? 'bg-[var(--color-brand)]/15 text-[var(--color-brand)]'
-                        : 'text-[var(--color-ink-faint)]'
-                    }`}
-                  >
-                    <span className="opacity-70">{i === 2 ? '🔊' : '#'}</span> {name}
-                  </div>
-                ))}
-              </div>
-              <div className="flex flex-1 flex-col justify-end gap-3 p-4">
-                {[60, 40, 75].map((w, i) => (
-                  <div key={i} className="flex items-center gap-2.5">
-                    <span
-                      className="h-8 w-8 shrink-0 rounded-full"
-                      style={{ background: i % 2 === 0 ? 'var(--color-brand)' : 'var(--color-idle)' }}
-                    />
-                    <span
-                      className="h-3.5 rounded bg-[var(--color-surface-3)]"
-                      style={{ width: `${w}%`, maxWidth: 320 }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          {/* Sağ sütun (lg+): tanıtım videosu — sayfa açılır açılmaz sessiz oynar,
+              ses düğmesiyle açılır (bkz. IntroVideo.tsx). Dar ekranda başta (order-first). */}
+          <IntroVideo />
         </div>
       </main>
 
