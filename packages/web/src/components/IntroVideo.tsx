@@ -70,7 +70,7 @@ export function IntroVideo() {
   }
 
   return (
-    <div className="relative order-first w-full max-w-xl overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-1)] shadow-2xl lg:order-none lg:max-w-none lg:flex-1">
+    <div className="relative w-full overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-1)] shadow-2xl">
       <video
         ref={ref}
         src="/tuscord-intro.mp4"
@@ -81,7 +81,7 @@ export function IntroVideo() {
         playsInline
         preload="auto"
         aria-label="Tuscord tanıtım videosu"
-        className="block h-auto max-h-[26dvh] w-full bg-black object-contain sm:max-h-[34dvh] lg:max-h-[60dvh]"
+        className="block h-auto max-h-[26dvh] w-full bg-black object-contain sm:max-h-[34dvh] lg:max-h-[42dvh]"
       />
       <button
         type="button"
