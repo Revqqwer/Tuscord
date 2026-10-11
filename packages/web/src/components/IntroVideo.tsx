@@ -1,9 +1,9 @@
 /**
  * Açılış sayfasındaki tanıtım videosu (public/tuscord-intro.mp4, 15 sn).
  *
- * Tarayıcılar sesli otomatik oynatmayı engeller; bu yüzden video SESSİZ ve
- * hemen oynamaya başlar (autoplay + muted + playsInline), döngüde kalır.
- * Sağ altta ses aç/kapat düğmesi var — kullanıcı tıklayınca ses gelir.
+ * Önce sesli oynatmayı dener; tarayıcı engellerse sessiz başlar ve
+ * kullanıcının ilk tıklama/tuş/dokunuşunda sesi açar. Döngüde kalır.
+ * Sağ altta ses aç/kapat düğmesi var.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -13,25 +13,50 @@ export function IntroVideo() {
   const ref = useRef<HTMLVideoElement>(null);
   const [muted, setMuted] = useState(true);
 
-  // React `muted` özniteliğini DOM'a güvenilir yazmaz → bazı tarayıcılar
-  // otomatik oynatmayı engeller. Özelliği elle ayarlayıp oynatmayı açıkça
-  // başlatıyoruz; sekme tekrar görünür olunca da (arka planda durmuş olabilir).
+  // Önce SESLİ oynatmayı dene (kullanıcı siteyle daha önce etkileşmişse,
+  // tarayıcı "medya etkileşimi" puanı yüksekse izin verir). Engellenirse sessiz
+  // başlat ve ilk tıklama/tuş/dokunuşta sesi aç — tarayıcılar sesli otomatik
+  // oynatmayı kullanıcı hareketi olmadan hiçbir şekilde izin vermez.
   useEffect(() => {
     const video = ref.current;
     if (!video) return;
-    video.muted = true;
-    const start = (): void => {
-      if (video.paused && !video.dataset.userPaused) void video.play().catch(() => undefined);
+    let cancelled = false;
+
+    const unmuteOnGesture = (): void => {
+      if (cancelled) return;
+      video.muted = false;
+      setMuted(false);
+      if (video.paused) void video.play().catch(() => undefined);
+      cleanupGesture();
     };
-    start();
+    const gestureEvents = ['pointerdown', 'keydown', 'touchstart', 'wheel'] as const;
+    const cleanupGesture = (): void => {
+      for (const e of gestureEvents) window.removeEventListener(e, unmuteOnGesture);
+    };
+
+    async function start(): Promise<void> {
+      video!.muted = false;
+      try {
+        await video!.play();
+        if (!cancelled) setMuted(false);
+      } catch {
+        // Sesli oynatma engellendi → sessiz başlat, ilk harekette sesi aç.
+        video!.muted = true;
+        setMuted(true);
+        void video!.play().catch(() => undefined);
+        for (const e of gestureEvents) window.addEventListener(e, unmuteOnGesture, { once: true });
+      }
+    }
+    void start();
+
     const onVisible = (): void => {
-      if (document.visibilityState === 'visible') start();
+      if (document.visibilityState === 'visible' && video.paused) void video.play().catch(() => undefined);
     };
     document.addEventListener('visibilitychange', onVisible);
-    video.addEventListener('canplay', start);
     return () => {
+      cancelled = true;
+      cleanupGesture();
       document.removeEventListener('visibilitychange', onVisible);
-      video.removeEventListener('canplay', start);
     };
   }, []);
 
