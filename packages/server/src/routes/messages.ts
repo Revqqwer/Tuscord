@@ -35,6 +35,7 @@ import { requireGuildAccess, visibleChannels } from '../services/permissions.js'
 import { parseMentions, violatesWordFilter } from '../services/mentions.js';
 import { publishChannelEvent } from '../services/events.js';
 import { sendPushToUsers } from '../services/push.js';
+import { pushAudience } from '../services/pushAudience.js';
 import { sendWebPushToUsers } from '../services/webPush.js';
 import { toAPIMessage } from '../services/serialize.js';
 import { writeAuditLog } from '../services/audit.js';
@@ -161,12 +162,14 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     }
 
     let replyToId: bigint | null = null;
+    let replyAuthorId: bigint | null = null;
     if (body.replyToId) {
       replyToId = BigInt(body.replyToId);
       const target = await db.query.messages.findFirst({ where: eq(messages.id, replyToId) });
       if (!target || target.channelId !== channelId) {
         throw Errors.badRequest('unknown_reply', 'Yanıtlanan mesaj bulunamadı');
       }
+      replyAuthorId = target.authorId;
     }
 
     const mentions = parseMentions(content, has(access.permissions, Permission.MENTION_EVERYONE));
@@ -236,7 +239,17 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     // Fire-and-forget: push gönderimi mesaj cevabını geciktirmesin, ayrıca
     // bir kullanıcının kayıtlı cihazı yoksa (mobil kullanmıyorsa) sorunsuzca
     // no-op olur (bkz. services/push.ts).
-    const recipientsExceptAuthor = access.recipients.filter((r) => r !== me).map((r) => r.toString());
+    // Kimlere push? DM'de herkese; sunucuda yalnızca bahsedilenlere / yanıtlananlara /
+    // @everyone'a (bkz. services/pushAudience.ts).
+    const recipientsExceptAuthor = await pushAudience({
+      guildId: access.guildId ?? null,
+      authorId: me,
+      recipients: access.recipients,
+      mentionUsers: mentions.users,
+      mentionRoles: mentions.roles,
+      mentionEveryone: mentions.everyone,
+      replyAuthorId,
+    });
     const pushTitle = payload!.author.displayName ?? payload!.author.username;
     const pushBody = content || 'bir dosya gönderdi';
     const pushData = { channelId: channelId.toString(), guildId: access.guildId?.toString() ?? null };
